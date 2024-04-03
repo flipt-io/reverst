@@ -1,0 +1,4 @@
+groups:
+  "flipt.dev.local":
+    hosts:
+    - "flipt.dev.local"
