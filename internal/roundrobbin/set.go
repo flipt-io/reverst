@@ -12,6 +12,7 @@ type Set[T comparable] struct {
 	mu      sync.RWMutex
 	last    atomic.Uint64
 	entries []T
+	evicted func(T)
 }
 
 func (s *Set[T]) Register(ctx context.Context, t T) {
@@ -20,11 +21,19 @@ func (s *Set[T]) Register(ctx context.Context, t T) {
 
 	s.entries = append(s.entries, t)
 
+	// start a goroutine which removes the instance from the set
+	// when the context is closed
 	go func() {
 		select {
 		case <-ctx.Done():
 			s.mu.Lock()
-			defer s.mu.Unlock()
+			defer func() {
+				s.mu.Unlock()
+
+				if s.evicted != nil {
+					s.evicted(t)
+				}
+			}()
 
 			slog.Debug("roundrobbin set: removing entry")
 
@@ -57,7 +66,7 @@ func (s *Set[T]) Next(ctx context.Context) (t T, ok bool) {
 		}
 
 		if s.last.CompareAndSwap(cur, next) {
-			return s.entries[next], true
+			return s.entries[cur], true
 		}
 	}
 }

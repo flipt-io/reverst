@@ -18,12 +18,14 @@ func (l *Level) Set(v string) error {
 	return nil
 }
 
-// TunnelGroups is a configuration file format for defining the
-// tunnels groups served by an instance of then reverst tunnel server
+// TunnelGroups is a configuration file format for defining the tunnel
+// groups served by an instance of then reverst tunnel server.
 type TunnelGroups struct {
-	Groups map[string]TunneGroup `json:"groups,omitempty" yaml:"groups,omitempty"`
+	Groups map[string]TunnelGroup `json:"groups,omitempty" yaml:"groups,omitempty"`
 }
 
-type TunneGroup struct {
+// TunnelGroup is an instance of a tunnel group which identifies
+// the hostnames served by the instances in the group.
+type TunnelGroup struct {
 	Hosts []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
 }
