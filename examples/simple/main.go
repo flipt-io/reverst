@@ -55,6 +55,7 @@ func main() {
 	<-ctx.Done()
 
 	slog.Info("Exiting...")
+	defer slog.Info("Finished")
 
 	stop()
 
@@ -66,7 +67,4 @@ func main() {
 		slog.Error("Error on shutdown", "error", err)
 	}
 
-	slog.Info("Finished")
-
-	os.Exit(0)
 }
