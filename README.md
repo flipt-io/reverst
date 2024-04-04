@@ -10,12 +10,6 @@ Reverst is a (load-balanced) reverse-tunnel server and Go server-client library 
 - Load-balanced: Run multiple instances of your services behind the same tunnel
 - Performant: Built on top of QUIC and HTTP/3
 
-## Building
-
-```
-go install ./cmd/...
-```
-
 ## Usage
 
 ### `reverst` tunnel server
@@ -30,10 +24,71 @@ USAGE
 
 FLAGS
   -l, --log LEVEL                    debug, info, warn or error (default: INFO)
-  -n, --server-name STRING           server name used to identify tunnel via TLS (required)
-  -a, --tunnel-address STRING        address for accepting tunneling quic connections (default: 127.0.0.1:7171)
+  -a, --tunnel-address STRING        address for accepting tunnelling quic connections (default: 127.0.0.1:7171)
   -s, --http-address STRING          address for serving HTTP requests (default: 127.0.0.1:8181)
   -g, --tunnel-groups STRING         path to tunnel groups configuration file (default: groups.yml)
+  -n, --server-name STRING           server name used to identify tunnel via TLS (required)
+  -k, --private-key-path STRING      path to TLS private key PEM file (required)
+  -c, --certificate-path STRING      path to TLS certificate PEM file (required)
+      --auth-type STRING             basic, bearer or insecure (default: basic)
+      --username STRING              basic authentication username (required for auth-type=basic)
+      --password STRING              basic authentication password (required for auth-type=basic)
+      --token STRING                 token authenticaiton credential (required for auth-type=bearer)
       --max-idle-timeout DURATION    maximum time a connection can be idle (default: 1m0s)
       --keep-alive-period DURATION   period between keep-alive events (default: 30s)
+```
+
+## Building
+
+```
+go install ./cmd/...
+```
+
+## Running
+
+The following walks through experimenting with the [./examples/simple](./examples/simple) server example.
+This directory contains a number of things needed to stand up reverst and a registering client server:
+
+- The example service in [./examples/simple/main.go](./examples/simple/main.go).
+- Simple self-signed TLS private key and certificate.
+- A tunnel-groups file for routing decisions.
+
+### Running `reverst`
+
+The following runs the tunnel server with:
+
+- The QUIC tunnel listener on `127.0.0.1:7171`
+- The HTTP serving listener on `127.0.0.1:8181`
+- Logging with `debug` level
+- A TLS server-name of `flipt.dev.local`
+- Some tunnel group definitions
+- The dummy TLS certificates
+- Basic authentication with username and password `user` and `pass` respectively
+
+```console
+go run ./cmd/reverst/... -l debug \
+    -n flipt.dev.local \
+    -g examples/simple/group.yml \
+    -k examples/simple/server.key \
+    -c examples/simple/server.crt \
+    --username user --password pass
+```
+
+### Running example server
+
+Now you can run the example server.
+This is a simple HTTP server that responds to all requests with `PONG`.
+It is setup to use the server client to register as a listener on the tunnel.
+
+```console
+go run ./examples/simple/main.go --username user --password pass
+```
+
+### Making requests
+
+You can now curl the tunnel and requests will be forward all the way through to the example server.
+Be sure to include the `Host` header, as this is used to route requests to the respective tunnel-group.
+
+```curl
+curl -H 'Host: flipt.dev.local' 127.0.0.1:8181/fo
 ```
