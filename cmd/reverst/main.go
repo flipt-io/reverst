@@ -12,6 +12,7 @@ import (
 	"github.com/peterbourgon/ff/v4"
 	"github.com/peterbourgon/ff/v4/ffhelp"
 	"github.com/quic-go/quic-go"
+	"go.flipt.io/reverst/internal/auth"
 	"go.flipt.io/reverst/internal/config"
 	"go.flipt.io/reverst/internal/protocol"
 	"gopkg.in/yaml.v3"
@@ -106,7 +107,16 @@ func runServer(ctx context.Context, conf config.Config) error {
 			slog.Debug("Accepted connection", "version", conn.ConnectionState().Version)
 
 			if err := server.Register(conn); err != nil {
-				slog.Error("Registering connection", "error", err)
+				level := slog.LevelError
+				if errors.Is(err, auth.ErrUnauthorized) {
+					level = slog.LevelDebug
+				}
+
+				// close connection with error
+				conn.CloseWithError(1, err.Error())
+
+				slog.Log(ctx, level, "Registering connection", "error", err)
+
 				continue
 			}
 

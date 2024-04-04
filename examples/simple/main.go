@@ -17,6 +17,8 @@ import (
 var (
 	srvName = flag.String("server-name", "flipt.dev.local", "Server name to advertise")
 	addr    = flag.String("addr", "127.0.0.1:7171", "Address on which to connect and establish tunnel")
+	user    = flag.String("username", "", "username for basic authentication")
+	passw   = flag.String("password", "", "password for basic authentication")
 )
 
 func main() {
@@ -40,6 +42,10 @@ func main() {
 			NextProtos:         []string{protocol.Name},
 			ServerName:         *srvName,
 		},
+	}
+
+	if *user != "" {
+		server.Authenticator = client.BasicAuthenticator(*user, *passw)
 	}
 
 	var group errgroup.Group

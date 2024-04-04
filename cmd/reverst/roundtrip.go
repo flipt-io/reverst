@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"go.flipt.io/reverst/internal/auth"
 	"go.flipt.io/reverst/internal/config"
 	"go.flipt.io/reverst/internal/protocol"
 	"go.flipt.io/reverst/internal/roundrobbin"
@@ -114,7 +116,12 @@ func (s *Server) Register(conn quic.EarlyConnection) error {
 	defer enc.Close()
 
 	if err := s.handler.Authenticate(&req); err != nil {
-		writeError(enc, err, protocol.CodeBadRequest)
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(enc, err, protocol.CodeUnauthorized)
+			return err
+		}
+
+		writeError(enc, err, protocol.CodeServerError)
 		return err
 	}
 

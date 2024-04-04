@@ -164,7 +164,7 @@ func (s *Server) register() error {
 	}
 
 	if err := enc.Encode(req); err != nil {
-		return fmt.Errorf("decoding register listener request: %w", err)
+		return fmt.Errorf("encoding register listener request: %w", err)
 	}
 
 	dec := protocol.NewDecoder[protocol.RegisterListenerResponse](stream)
@@ -172,7 +172,7 @@ func (s *Server) register() error {
 
 	resp, err := dec.Decode()
 	if err != nil {
-		return fmt.Errorf("encoding register listener response: %w", err)
+		return fmt.Errorf("decoding register listener response: %w", err)
 	}
 
 	if resp.Code != protocol.CodeOK {
