@@ -1,0 +1,12 @@
+{
+  "name": "reverst",
+  "sdk": "go",
+  "dependencies": [
+    {
+      "name": "go",
+      "source": "github.com/vito/daggerverse/go@f7223d2d82fb91622cbb7954177388d995a98d59"
+    }
+  ],
+  "source": "dagger",
+  "engineVersion": "v0.10.3"
+}
