@@ -55,6 +55,10 @@ type Server struct {
 	// See DefaultQuicConfig for the parameters used which this is set to nil.
 	QuicConfig *quic.Config
 
+	// Authenticator is the Authenticator used to authenticate outbound
+	// listener registration requests.
+	Authenticator Authenticator
+
 	conn quic.Connection
 }
 
@@ -145,10 +149,21 @@ func (s *Server) register() error {
 	enc := protocol.NewEncoder[protocol.RegisterListenerRequest](stream)
 	defer enc.Close()
 
-	if err := enc.Encode(&protocol.RegisterListenerRequest{
+	req := &protocol.RegisterListenerRequest{
 		Version:     protocol.Version,
 		TunnelGroup: s.TLSConfig.ServerName,
-	}); err != nil {
+	}
+
+	auth := defaultAuthenticator
+	if s.Authenticator != nil {
+		auth = s.Authenticator
+	}
+
+	if err := auth.Authenticate(stream.Context(), req); err != nil {
+		return fmt.Errorf("registering new connection: %w", err)
+	}
+
+	if err := enc.Encode(req); err != nil {
 		return fmt.Errorf("decoding register listener request: %w", err)
 	}
 
