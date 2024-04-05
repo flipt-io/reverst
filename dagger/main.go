@@ -16,8 +16,15 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"dagger/reverst/internal/dagger"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	"time"
 )
 
 const (
@@ -43,7 +50,70 @@ func (m *Reverst) BuildContainer(
 		Container().
 		From("alpine:3.18").
 		WithFile("/usr/local/bin/reverst", build.File("reverst")).
-		WithDefaultArgs([]string{"reverst"}), nil
+		WithEntrypoint([]string{"reverst"}), nil
+}
+
+func (m *Reverst) Test(
+	ctx context.Context,
+	source *dagger.Directory,
+) (string, error) {
+	ctr, err := m.BuildContainer(ctx, source)
+	if err != nil {
+		return "", err
+	}
+
+	key, cert, err := generateKeyPair()
+	if err != nil {
+		return "", err
+	}
+
+	reverst := ctr.
+		WithEnvVariable("REVERST_LOG", "debug").
+		WithEnvVariable("REVERST_TUNNEL_ADDRESS", "0.0.0.0:7171").
+		WithEnvVariable("REVERST_SERVER_NAME", "local.example").
+		WithNewFile("/etc/reverst/key.pem", dagger.ContainerWithNewFileOpts{
+			Contents: string(key),
+		}).
+		WithEnvVariable("REVERST_PRIVATE_KEY_PATH", "/etc/reverst/key.pem").
+		WithNewFile("/etc/reverst/cert.pem", dagger.ContainerWithNewFileOpts{
+			Contents: string(cert),
+		}).
+		WithEnvVariable("REVERST_CERTIFICATE_PATH", "/etc/reverst/cert.pem").
+		WithNewFile("/etc/reverst/groups.yml", dagger.ContainerWithNewFileOpts{
+			Contents: `groups:
+  "local.example":
+    hosts: ["local.example"]
+    authentication:
+      type: "basic"
+      username: "user"
+      password: "pass"
+`,
+		}).
+		WithEnvVariable("REVERST_TUNNEL_GROUPS", "/etc/reverst/groups.yml").
+		WithExposedPort(7171, dagger.ContainerWithExposedPortOpts{
+			Protocol: dagger.Udp,
+		}).
+		WithExposedPort(8181, dagger.ContainerWithExposedPortOpts{
+			Protocol: dagger.Tcp,
+		}).
+		WithExec(nil).
+		AsService()
+
+	if _, err := dag.
+		Container().
+		From("alpine:3.18").
+		WithServiceBinding("local.example", reverst).
+		WithFile("/usr/local/bin/integration",
+			dag.Go().FromVersion("1.21-alpine3.18").
+				Build(source, dagger.GoBuildOpts{
+					Packages: []string{"./dagger/internal/testing/cmd/integration/..."},
+				}).File("integration")).
+		WithExec([]string{"integration"}).
+		Sync(ctx); err != nil {
+		return "", err
+	}
+
+	return "OK", nil
 }
 
 func (m *Reverst) Publish(
@@ -51,10 +121,13 @@ func (m *Reverst) Publish(
 	source *dagger.Directory,
 	password *Secret,
 	//+optional
+	//+default="ghcr.io"
 	registry string,
 	//+optional
+	//+default="flipt-io"
 	username string,
 	//+optional
+	//+default="reverst"
 	image string,
 ) (string, error) {
 	ctr, err := m.BuildContainer(ctx, source)
@@ -62,19 +135,40 @@ func (m *Reverst) Publish(
 		return "", err
 	}
 
-	if registry == "" {
-		registry = "ghcr.io"
-	}
-
-	if username == "" {
-		username = "flipt-io"
-	}
-
-	if image == "" {
-		image = "reverst"
-	}
-
 	return ctr.
 		WithRegistryAuth(registry, username, password).
 		Publish(ctx, fmt.Sprintf("%s/%s/%s", registry, username, image))
+}
+
+func generateKeyPair() ([]byte, []byte, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	keyPem := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+
+	crt := x509.Certificate{
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().AddDate(10, 0, 0),
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName:   "Flipt",
+			Organization: []string{"Flipt Corp."},
+		},
+		BasicConstraintsValid: true,
+	}
+	cert, err := x509.CreateCertificate(rand.Reader, &crt, &crt, &key.PublicKey, key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Generate a pem block with the certificate
+	return keyPem, pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert,
+	}), nil
 }

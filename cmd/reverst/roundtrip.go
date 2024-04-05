@@ -14,8 +14,8 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"go.flipt.io/reverst/internal/auth"
 	"go.flipt.io/reverst/internal/config"
-	"go.flipt.io/reverst/internal/protocol"
 	"go.flipt.io/reverst/internal/roundrobbin"
+	"go.flipt.io/reverst/pkg/protocol"
 )
 
 type Server struct {
@@ -63,7 +63,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Debug("Finished handling request", "error", err)
 	}()
 
-	host := r.Host
+	host, _, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		host = r.Host
+	}
+
 	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
 		host = forwarded
 	}

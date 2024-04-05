@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"go.flipt.io/reverst/internal/protocol"
+	"go.flipt.io/reverst/pkg/protocol"
 )
 
 const authorizationMetadataKey = "Authorization"

@@ -40,6 +40,16 @@ FLAGS
 go install ./cmd/...
 ```
 
+## Testing
+
+Reverst uses Dagger to setup and run an integration test suite.
+
+```console
+dagger call test --source=.
+```
+
+The test suite sets up a tunnel, registers a server-client to the tunnel and then requests the service through the tunnels HTTP interface.
+
 ## Running
 
 The following walks through experimenting with the [./examples/simple](./examples/simple) server example.

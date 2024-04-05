@@ -10,7 +10,7 @@ import (
 	"os/signal"
 
 	"go.flipt.io/reverst/client"
-	"go.flipt.io/reverst/internal/protocol"
+	"go.flipt.io/reverst/pkg/protocol"
 	"golang.org/x/sync/errgroup"
 )
 

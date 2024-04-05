@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"go.flipt.io/reverst/internal/auth"
-	"go.flipt.io/reverst/internal/protocol"
 	"go.flipt.io/reverst/internal/synctyped"
+	"go.flipt.io/reverst/pkg/protocol"
 )
 
 type Config struct {
 	Level            Level  `ff:" short=l | long=log              | default=info             | usage: 'debug, info, warn or error'                           "`
 	TunnelAddress    string `ff:" short=a | long=tunnel-address   | default='127.0.0.1:7171' | usage: address for accepting tunnelling quic connections      "`
-	HTTPAddress      string `ff:" short=s | long=http-address     | default='127.0.0.1:8181' | usage: address for serving HTTP requests                      "`
+	HTTPAddress      string `ff:" short=s | long=http-address     | default='0.0.0.0:8181'   | usage: address for serving HTTP requests                      "`
 	TunnelGroupsPath string `ff:" short=g | long=tunnel-groups    | default='groups.yml'     | usage: path to tunnel groups configuration file               "`
 	ServerName       string `ff:" short=n | long=server-name      |                            usage: server name used to identify tunnel via TLS (required) "`
 	PrivateKeyPath   string `ff:" short=k | long=private-key-path |                            usage: path to TLS private key PEM file (required)            "`

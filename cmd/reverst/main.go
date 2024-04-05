@@ -14,7 +14,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"go.flipt.io/reverst/internal/auth"
 	"go.flipt.io/reverst/internal/config"
-	"go.flipt.io/reverst/internal/protocol"
+	"go.flipt.io/reverst/pkg/protocol"
 	"gopkg.in/yaml.v3"
 )
 

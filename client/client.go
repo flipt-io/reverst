@@ -12,7 +12,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
-	"go.flipt.io/reverst/internal/protocol"
+	"go.flipt.io/reverst/pkg/protocol"
 )
 
 var (
@@ -58,6 +58,10 @@ type Server struct {
 	// Authenticator is the Authenticator used to authenticate outbound
 	// listener registration requests.
 	Authenticator Authenticator
+
+	// OnConnectionReady is called when the server has successfully
+	// registered itself with the upstream tunnel server
+	OnConnectionReady func(protocol.RegisterListenerResponse)
 
 	conn quic.Connection
 }
@@ -177,6 +181,10 @@ func (s *Server) register() error {
 
 	if resp.Code != protocol.CodeOK {
 		return fmt.Errorf("unexpected response code: %s", resp.Code)
+	}
+
+	if s.OnConnectionReady != nil {
+		s.OnConnectionReady(resp)
 	}
 
 	return nil

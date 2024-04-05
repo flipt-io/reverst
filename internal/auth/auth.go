@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"go.flipt.io/reverst/internal/protocol"
+	"go.flipt.io/reverst/pkg/protocol"
 )
 
 // ErrUnauthorized is returned when the attempted request is not authorized
