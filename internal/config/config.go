@@ -8,6 +8,7 @@ import (
 
 	"go.flipt.io/reverst/internal/auth"
 	"go.flipt.io/reverst/internal/protocol"
+	"go.flipt.io/reverst/internal/synctyped"
 )
 
 type Config struct {
@@ -18,11 +19,6 @@ type Config struct {
 	ServerName       string `ff:" short=n | long=server-name      |                            usage: server name used to identify tunnel via TLS (required) "`
 	PrivateKeyPath   string `ff:" short=k | long=private-key-path |                            usage: path to TLS private key PEM file (required)            "`
 	CertificatePath  string `ff:" short=c | long=certificate-path |                            usage: path to TLS certificate PEM file (required)            "`
-
-	AuthType string `ff:" long=auth-type | default=basic  | usage: 'basic, bearer or insecure' "`
-	Username string `ff:" long=username  |                  usage: 'basic authentication username (required for auth-type=basic)'    "`
-	Password string `ff:" long=password  |                  usage: 'basic authentication password (required for auth-type=basic)'    "`
-	Token    string `ff:" long=token     |                  usage: 'token authenticaiton credential (required for auth-type=bearer)' "`
 
 	MaxIdleTimeout  time.Duration `ff:" long=max-idle-timeout  | default=1m  | usage: maximum time a connection can be idle "`
 	KeepAlivePeriod time.Duration `ff:" long=keep-alive-period | default=30s | usage: period between keep-alive events      "`
@@ -41,17 +37,80 @@ func (c Config) Validate() error {
 		return errors.New("certificate-path must be non-empty string")
 	}
 
-	switch c.AuthType {
-	case "basic":
-		if c.Username == "" {
+	return nil
+}
+
+// TunnelGroups is a configuration file format for defining the tunnel
+// groups served by an instance of then reverst tunnel server.
+type TunnelGroups struct {
+	Groups map[string]TunnelGroup `json:"groups,omitempty" yaml:"groups,omitempty"`
+}
+
+func (g TunnelGroups) Validate() error {
+	for _, g := range g.Groups {
+		if err := g.Validate(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (g TunnelGroups) AuthenticationHandler() (protocol.AuthenticationHandler, error) {
+	handlerCache := synctyped.Map[protocol.AuthenticationHandler]{}
+
+	return protocol.AuthenticationHandlerFunc(func(rlr *protocol.RegisterListenerRequest) error {
+		group, ok := g.Groups[rlr.TunnelGroup]
+		if !ok {
+			return fmt.Errorf("unknown tunnel group: %q", rlr.TunnelGroup)
+		}
+
+		handler, ok := handlerCache.Load(rlr.TunnelGroup)
+		if !ok {
+			switch group.Authentication.Type {
+			case "", "basic":
+				handler = auth.HandleBasic(group.Authentication.Username, group.Authentication.Password)
+			case "token":
+				handler = auth.HandleBearer(group.Authentication.Token)
+			case "insecure":
+				handler = protocol.AuthenticationHandlerFunc(func(rlr *protocol.RegisterListenerRequest) error {
+					return nil
+				})
+			default:
+				return fmt.Errorf("unknown authentication type: %q", group.Authentication.Type)
+			}
+
+			handlerCache.Store(rlr.TunnelGroup, handler)
+		}
+
+		return handler.Authenticate(rlr)
+	}), nil
+}
+
+// TunnelGroup is an instance of a tunnel group which identifies
+// the hostnames served by the instances in the group.
+type TunnelGroup struct {
+	Hosts          []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
+	Authentication struct {
+		Type     string `json:"type" yaml:"type"`
+		Username string `json:"username,omitempty" yaml:"username,omitempty"`
+		Password string `json:"password,omitempty" yaml:"password,omitempty"`
+		Token    string `json:"token,omitempty" yaml:"token,omitempty"`
+	} `json:"authentication,omitempty"`
+}
+
+func (g TunnelGroup) Validate() error {
+	switch g.Authentication.Type {
+	case "", "basic":
+		if g.Authentication.Username == "" {
 			return errors.New("username must be non-empty string (when auth-type == basic)")
 		}
 
-		if c.Password == "" {
+		if g.Authentication.Password == "" {
 			return errors.New("password must be non-empty string (when auth-type == basic)")
 		}
 	case "token":
-		if c.Token == "" {
+		if g.Authentication.Token == "" {
 			return errors.New("token must be non-empty string (when auth-type == bearer)")
 		}
 	case "insecure":
@@ -59,25 +118,10 @@ func (c Config) Validate() error {
 
 		return nil
 	default:
-		return fmt.Errorf("unknown authentication type: %q", c.AuthType)
+		return fmt.Errorf("unknown authentication type: %q", g.Authentication.Type)
 	}
 
 	return nil
-}
-
-func (c Config) AuthenticationHandler() (protocol.AuthenticationHandler, error) {
-	switch c.AuthType {
-	case "basic":
-		return auth.HandleBasic(c.Username, c.Password), nil
-	case "token":
-		return auth.HandleBearer(c.Token), nil
-	case "insecure":
-		return protocol.AuthenticationHandlerFunc(func(rlr *protocol.RegisterListenerRequest) error {
-			return nil
-		}), nil
-	default:
-		return nil, fmt.Errorf("unknown authentication type: %q", c.AuthType)
-	}
 }
 
 type Level slog.Level
@@ -94,16 +138,4 @@ func (l *Level) Set(v string) error {
 
 	*l = Level(level)
 	return nil
-}
-
-// TunnelGroups is a configuration file format for defining the tunnel
-// groups served by an instance of then reverst tunnel server.
-type TunnelGroups struct {
-	Groups map[string]TunnelGroup `json:"groups,omitempty" yaml:"groups,omitempty"`
-}
-
-// TunnelGroup is an instance of a tunnel group which identifies
-// the hostnames served by the instances in the group.
-type TunnelGroup struct {
-	Hosts []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
 }

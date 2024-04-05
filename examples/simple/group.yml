@@ -2,3 +2,7 @@ groups:
   "flipt.dev.local":
     hosts:
     - "flipt.dev.local"
+    authentication:
+      type: "basic"
+      username: "user"
+      password: "pass"

@@ -30,10 +30,6 @@ FLAGS
   -n, --server-name STRING           server name used to identify tunnel via TLS (required)
   -k, --private-key-path STRING      path to TLS private key PEM file (required)
   -c, --certificate-path STRING      path to TLS certificate PEM file (required)
-      --auth-type STRING             basic, bearer or insecure (default: basic)
-      --username STRING              basic authentication username (required for auth-type=basic)
-      --password STRING              basic authentication password (required for auth-type=basic)
-      --token STRING                 token authenticaiton credential (required for auth-type=bearer)
       --max-idle-timeout DURATION    maximum time a connection can be idle (default: 1m0s)
       --keep-alive-period DURATION   period between keep-alive events (default: 30s)
 ```
@@ -61,17 +57,18 @@ The following runs the tunnel server with:
 - The HTTP serving listener on `127.0.0.1:8181`
 - Logging with `debug` level
 - A TLS server-name of `flipt.dev.local`
-- Some tunnel group definitions
+- Some tunnel group definitions with a single tunnel group
+    - The group has the name `flipt.dev.local`
+    - The group is reachable under the same host name
+    - The group requires basic username and password authentication
 - The dummy TLS certificates
-- Basic authentication with username and password `user` and `pass` respectively
 
 ```console
 go run ./cmd/reverst/... -l debug \
     -n flipt.dev.local \
     -g examples/simple/group.yml \
     -k examples/simple/server.key \
-    -c examples/simple/server.crt \
-    --username user --password pass
+    -c examples/simple/server.crt
 ```
 
 ### Running example server

@@ -90,7 +90,7 @@ func runServer(ctx context.Context, conf config.Config) error {
 		return fmt.Errorf("initializing server: %w", err)
 	}
 
-	handler, err := conf.AuthenticationHandler()
+	handler, err := groups.AuthenticationHandler()
 	if err != nil {
 		return fmt.Errorf("initializing server: %w", err)
 	}
