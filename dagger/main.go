@@ -99,16 +99,13 @@ func (m *Reverst) Test(
 		WithExec(nil).
 		AsService()
 
-	if _, err := dag.
-		Container().
-		From("alpine:3.18").
+	if _, err := dag.Container().
+		From("golang:1.21-alpine3.18").
 		WithServiceBinding("local.example", reverst).
-		WithFile("/usr/local/bin/integration",
-			dag.Go().FromVersion("1.21-alpine3.18").
-				Build(source, dagger.GoBuildOpts{
-					Packages: []string{"./dagger/internal/testing/cmd/integration/..."},
-				}).File("integration")).
-		WithExec([]string{"integration"}).
+		With(dag.Go().GlobalCache).
+		WithMountedDirectory("/src", source).
+		WithWorkdir("/src").
+		WithExec([]string{"go", "test", "./internal/test/...", "-integration"}).
 		Sync(ctx); err != nil {
 		return "", err
 	}
