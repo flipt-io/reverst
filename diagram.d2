@@ -1,17 +1,33 @@
 shape: sequence_diagram
 
-client: Client Server
+client_one: Client Server A
+client_two: Client Server B
 reverst: Reverst Tunnel
-user: End User
 
-registration handshake: {
-  client -> reverst.handshake: RegisterListenerRequest
-  reverst.handshake -> client: RegisterListenerResponse
+registration handshake one: {
+  client_one -> reverst.handshake: RegisterListenerRequest
+  reverst.handshake -> client_one: RegisterListenerResponse
 }
 
-tunnelled request: {
-  user -> reverst.req: Request
-  reverst -> client.req: Request
-  client.req -> reverst: Response
-  reverst.req -> user: Response
+registration handshake two: {
+  client_two -> reverst.handshake_two: RegisterListenerRequest
+  reverst.handshake_two -> client_two: RegisterListenerResponse
+}
+
+user: End User
+
+tunnel group: {
+  tunnelled request one: {
+    user -> reverst.req: Request
+    reverst -> client_one.req: Request
+    client_one.req -> reverst: Response
+    reverst.req -> user: Response
+  }
+
+  tunnelled request two: {
+    user -> reverst.req_two: Request
+    reverst -> client_two.req_two: Request
+    client_two.req_two -> reverst: Response
+    reverst.req_two -> user: Response
+  }
 }

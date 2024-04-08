@@ -10,6 +10,13 @@ Reverst is a (load-balanced) reverse-tunnel server and Go server-client library 
 - Load-balanced: Run multiple instances of your services behind the same tunnel
 - Performant: Built on top of QUIC and HTTP/3
 
+## Use-case
+
+Reverst is for exposing services on the public internet from within restrictive networks (e.g. behind NAT gateways).
+The tunnel binary is intended to be deployed on the public internet.
+Client servers then dial out to the tunnels and register themselves on target tunnel groups.
+A tunnel group is a load-balanced set of client-servers, which is exposed through the reverst tunnel HTTP interface.
+
 ![Tunnel Lifecycle](./diagram.png)
 
 ## Usage
