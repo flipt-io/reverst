@@ -17,7 +17,9 @@ The tunnel binary is intended to be deployed on the public internet.
 Client servers then dial out to the tunnels and register themselves on target tunnel groups.
 A tunnel group is a load-balanced set of client-servers, which is exposed through the reverst tunnel HTTP interface.
 
-![Tunnel Lifecycle](./diagram.png)
+<p align="center">
+  <img width="800" height="1199" src="./diagram.png" alt="Tunnel Lifecycle">
+</p>
 
 ## Usage
 
