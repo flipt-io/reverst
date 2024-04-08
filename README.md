@@ -14,7 +14,7 @@ Reverst is a (load-balanced) reverse-tunnel server and Go server-client library 
 
 ### `reverst` tunnel server
 
-```
+```console
 ➜  reverst -h
 COMMAND
   reverst
@@ -34,13 +34,27 @@ FLAGS
       --keep-alive-period DURATION   period between keep-alive events (default: 30s)
 ```
 
-## Building
+## Client
 
+### Building
+
+```console
+go install ./client/...
 ```
+
+### Usage
+
+See [./client](./client) directory for more details.
+
+## Server
+
+### Building
+
+```console
 go install ./cmd/...
 ```
 
-## Testing
+### Testing
 
 Reverst uses Dagger to setup and run an integration test suite.
 
@@ -50,7 +64,7 @@ dagger call test --source=.
 
 The test suite sets up a tunnel, registers a server-client to the tunnel and then requests the service through the tunnels HTTP interface.
 
-## Running
+### Running
 
 The following walks through experimenting with the [./examples/simple](./examples/simple) server example.
 This directory contains a number of things needed to stand up reverst and a registering client server:
@@ -59,7 +73,7 @@ This directory contains a number of things needed to stand up reverst and a regi
 - Simple self-signed TLS private key and certificate.
 - A tunnel-groups file for routing decisions.
 
-### Running `reverst`
+#### Running `reverst`
 
 The following runs the tunnel server with:
 
@@ -81,7 +95,7 @@ go run ./cmd/reverst/... -l debug \
     -c examples/simple/server.crt
 ```
 
-### Running example server
+#### Running example server
 
 Now you can run the example server.
 This is a simple HTTP server that responds to all requests with `PONG`.
@@ -91,7 +105,7 @@ It is setup to use the server client to register as a listener on the tunnel.
 go run ./examples/simple/main.go --username user --password pass
 ```
 
-### Making requests
+#### Making requests
 
 You can now curl the tunnel and requests will be forward all the way through to the example server.
 Be sure to include the `Host` header, as this is used to route requests to the respective tunnel-group.

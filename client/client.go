@@ -30,7 +30,7 @@ var (
 )
 
 // Server is an alternative HTTP server that dials to a reverst Tunnel server
-// and attempts to register itself as a listener.
+// and attempts to remotely register itself as a listener.
 // Given the connection is established and authorized as a valid listener the
 // server switches into serving mode and handles HTTP/3 requests over the connection.
 // The Tunnel should forward requests to this connection and any others in the
@@ -190,6 +190,8 @@ func (s *Server) register() error {
 	return nil
 }
 
+// Close closing any open connections and releases associated resources.
+// This should be called to properly teardown the connection.
 func (s *Server) Close() error {
 	if s.conn == nil {
 		return nil
