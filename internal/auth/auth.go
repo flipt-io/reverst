@@ -49,7 +49,6 @@ func HandleBasic(username, password string) protocol.AuthenticationHandler {
 
 		return nil
 	})
-
 }
 
 // HandleBearer performs a bearer token comparison for register listener request metadata
