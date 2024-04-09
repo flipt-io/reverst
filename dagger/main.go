@@ -53,7 +53,27 @@ func (m *Reverst) BuildContainer(
 		WithEntrypoint([]string{"reverst"}), nil
 }
 
-func (m *Reverst) Test(
+func (m *Reverst) TestUnit(
+	ctx context.Context,
+	source *dagger.Directory,
+) (string, error) {
+	out, err := dag.Container().
+		From("golang:1.21-alpine3.18").
+		WithExec([]string{"apk", "add", "gcc", "build-base"}).
+		With(dag.Go().GlobalCache).
+		WithEnvVariable("CGO_ENABLED", "1").
+		WithMountedDirectory("/src", source).
+		WithWorkdir("/src").
+		WithExec([]string{"go", "test", "-race", "./..."}).
+		Stdout(ctx)
+	if err != nil {
+		return out, err
+	}
+
+	return out, nil
+}
+
+func (m *Reverst) TestIntegration(
 	ctx context.Context,
 	source *dagger.Directory,
 ) (string, error) {
@@ -99,18 +119,19 @@ func (m *Reverst) Test(
 		WithExec(nil).
 		AsService()
 
-	if _, err := dag.Container().
+	out, err := dag.Container().
 		From("golang:1.21-alpine3.18").
 		WithServiceBinding("local.example", reverst).
 		With(dag.Go().GlobalCache).
 		WithMountedDirectory("/src", source).
 		WithWorkdir("/src").
 		WithExec([]string{"go", "test", "./internal/test/...", "-integration"}).
-		Sync(ctx); err != nil {
-		return "", err
+		Stdout(ctx)
+	if err != nil {
+		return out, err
 	}
 
-	return "OK", nil
+	return out, nil
 }
 
 func (m *Reverst) Publish(
