@@ -47,6 +47,12 @@ FLAGS
 
 ## Client
 
+### Install
+  
+```console
+go get go.flipt.io/reverst/client
+```
+
 ### Building
 
 ```console
@@ -93,9 +99,9 @@ The following runs the tunnel server with:
 - Logging with `debug` level
 - A TLS server-name of `flipt.dev.local`
 - Some tunnel group definitions with a single tunnel group
-    - The group has the name `flipt.dev.local`
-    - The group is reachable under the same host name
-    - The group requires basic username and password authentication
+  - The group has the name `flipt.dev.local`
+  - The group is reachable under the same host name
+  - The group requires basic username and password authentication
 - The dummy TLS certificates
 
 ```console
