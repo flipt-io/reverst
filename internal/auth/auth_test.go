@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	basic  = HandleBasic("morty", "gazorpazorp")
-	bearer = HandleBearer("plumbus")
+	basic           = HandleBasic("morty", "gazorpazorp")
+	bearer          = HandleBearer("plumbus")
+	bearerHashed, _ = HandleBearerHashed("34831eccb70007e3ed06bb8ba0e2c80e661c440d09fb6513c96cd1fdeb5c57cc")
 )
 
 func Test_Handlers(t *testing.T) {
@@ -138,6 +139,49 @@ func Test_Handlers(t *testing.T) {
 			},
 			expectedErr: ErrUnauthorized,
 		},
+		{
+			name:    "bearerHashed: matches",
+			handler: bearerHashed,
+			request: protocol.RegisterListenerRequest{
+				TunnelGroup: "sanchez",
+				Metadata: map[string]string{
+					"Authorization": "Bearer plumbus",
+				},
+			},
+		},
+		{
+			name:    "bearerHashed: missing metadata key",
+			handler: bearerHashed,
+			request: protocol.RegisterListenerRequest{
+				TunnelGroup: "sanchez",
+				Metadata: map[string]string{
+					"WrongKey": "Basic bW9ydHk6Z2F6b3JwYXpvcnA=",
+				},
+			},
+			expectedErr: ErrUnauthorized,
+		},
+		{
+			name:    "bearerHashed: unexpected scheme",
+			handler: bearerHashed,
+			request: protocol.RegisterListenerRequest{
+				TunnelGroup: "sanchez",
+				Metadata: map[string]string{
+					"Authorization": "Unknown plumbus",
+				},
+			},
+			expectedErr: ErrUnauthorized,
+		},
+		{
+			name:    "bearerHashed: unknown token",
+			handler: bearerHashed,
+			request: protocol.RegisterListenerRequest{
+				TunnelGroup: "sanchez",
+				Metadata: map[string]string{
+					"Authorization": "Bearer wubalubadubdub",
+				},
+			},
+			expectedErr: ErrUnauthorized,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := test.handler.Authenticate(&test.request)
@@ -173,6 +217,22 @@ func FuzzBearer(f *testing.F) {
 	f.Add("Bearer c29tZWludmFsaWQ6Y29tYmluYXRpb24=")
 	f.Fuzz(func(t *testing.T, a string) {
 		require.ErrorIs(t, bearer.Authenticate(
+			&protocol.RegisterListenerRequest{
+				TunnelGroup: "sanchez",
+				Metadata: map[string]string{
+					"Authorization": a,
+				},
+			},
+		), ErrUnauthorized)
+	})
+}
+
+func FuzzBearerHashed(f *testing.F) {
+	f.Add("someunexpectedpayload")
+	f.Add("Bearer th*s i% n@t b@$£64")
+	f.Add("Bearer c29tZWludmFsaWQ6Y29tYmluYXRpb24=")
+	f.Fuzz(func(t *testing.T, a string) {
+		require.ErrorIs(t, bearerHashed.Authenticate(
 			&protocol.RegisterListenerRequest{
 				TunnelGroup: "sanchez",
 				Metadata: map[string]string{

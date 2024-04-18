@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"go.flipt.io/reverst/internal/auth"
@@ -71,7 +72,35 @@ func (g TunnelGroups) AuthenticationHandler() (protocol.AuthenticationHandler, e
 			case "", "basic":
 				handler = auth.HandleBasic(group.Authentication.Username, group.Authentication.Password)
 			case "token":
-				handler = auth.HandleBearer(group.Authentication.Token)
+				if group.Authentication.Token != "" || group.Authentication.TokenPath != "" {
+					token := group.Authentication.Token
+					if token == "" {
+						tokenBytes, err := os.ReadFile(group.Authentication.TokenPath)
+						if err != nil {
+							return err
+						}
+
+						token = string(tokenBytes)
+					}
+
+					handler = auth.HandleBearer(token)
+				} else {
+					token := group.Authentication.HashedToken
+					if token == "" {
+						tokenBytes, err := os.ReadFile(group.Authentication.HashedTokenPath)
+						if err != nil {
+							return err
+						}
+
+						token = string(tokenBytes)
+					}
+
+					var err error
+					handler, err = auth.HandleBearerHashed(token)
+					if err != nil {
+						return err
+					}
+				}
 			case "insecure":
 				handler = protocol.AuthenticationHandlerFunc(func(rlr *protocol.RegisterListenerRequest) error {
 					return nil
@@ -92,33 +121,40 @@ func (g TunnelGroups) AuthenticationHandler() (protocol.AuthenticationHandler, e
 type TunnelGroup struct {
 	Hosts          []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
 	Authentication struct {
-		Type     string `json:"type" yaml:"type"`
-		Username string `json:"username,omitempty" yaml:"username,omitempty"`
-		Password string `json:"password,omitempty" yaml:"password,omitempty"`
-		Token    string `json:"token,omitempty" yaml:"token,omitempty"`
+		Type            string `json:"type" yaml:"type"`
+		Username        string `json:"username,omitempty" yaml:"username,omitempty"`
+		Password        string `json:"password,omitempty" yaml:"password,omitempty"`
+		Token           string `json:"token,omitempty" yaml:"token,omitempty"`
+		TokenPath       string `json:"tokenPath,omitempty" yaml:"tokenPath,omitempty"`
+		HashedToken     string `json:"hashedToken,omitempty" yaml:"hashedToken,omitempty"`
+		HashedTokenPath string `json:"hashedTokenPath,omitempty" yaml:"hashedTokenPath,omitempty"`
 	} `json:"authentication,omitempty"`
 }
 
 func (g TunnelGroup) Validate() error {
-	switch g.Authentication.Type {
+	auth := g.Authentication
+	switch auth.Type {
 	case "", "basic":
-		if g.Authentication.Username == "" {
+		if auth.Username == "" {
 			return errors.New("username must be non-empty string (when auth-type == basic)")
 		}
 
-		if g.Authentication.Password == "" {
+		if auth.Password == "" {
 			return errors.New("password must be non-empty string (when auth-type == basic)")
 		}
 	case "token":
-		if g.Authentication.Token == "" {
-			return errors.New("token must be non-empty string (when auth-type == bearer)")
+		if auth.Token == "" &&
+			auth.TokenPath == "" &&
+			auth.HashedToken == "" &&
+			auth.HashedTokenPath == "" {
+			return errors.New("one of token, tokenPath, hashedToken or hashedTokenPath must be non-empty string (when auth-type == bearer)")
 		}
 	case "insecure":
 		slog.Warn("Authentication type insecure has been chosen (requests will not be authenticated)")
 
 		return nil
 	default:
-		return fmt.Errorf("unknown authentication type: %q", g.Authentication.Type)
+		return fmt.Errorf("unknown authentication type: %q", auth.Type)
 	}
 
 	return nil
