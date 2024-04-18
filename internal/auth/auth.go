@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"strings"
@@ -71,7 +72,33 @@ func HandleBearer(token string) protocol.AuthenticationHandler {
 
 		return nil
 	})
+}
 
+// HandleBearerHashed performs a bearer token comparison for register listener request metadata
+// It expects the token to have been pre-hashed using sha256 and encoded as a hexidecimal string
+func HandleBearerHashed(hashedToken string) (protocol.AuthenticationHandler, error) {
+	expected, err := hex.DecodeString(hashedToken)
+	if err != nil {
+		return nil, err
+	}
+
+	return protocol.AuthenticationHandlerFunc(func(rlr *protocol.RegisterListenerRequest) error {
+		log := slog.With("tunnel_group", rlr.TunnelGroup)
+
+		token, err := parseAuthorization(rlr, "Bearer ")
+		if err != nil {
+			log.Info(unauthorizedMsg, "error", err)
+			return ErrUnauthorized
+		}
+
+		sum := sha256.Sum256([]byte(token))
+		if subtle.ConstantTimeCompare(expected, sum[:]) != 1 {
+			log.Info(unauthorizedMsg, "error", errors.New("unexpected token"))
+			return ErrUnauthorized
+		}
+
+		return nil
+	}), nil
 }
 
 func parseAuthorization(r *protocol.RegisterListenerRequest, expectedScheme string) (string, error) {
