@@ -90,6 +90,10 @@ func runServer(ctx context.Context, conf config.Config) error {
 		return fmt.Errorf("initializing server: %w", err)
 	}
 
+	if err := groups.Validate(); err != nil {
+		return fmt.Errorf("validating tunnel groups: %w", err)
+	}
+
 	handler, err := groups.AuthenticationHandler()
 	if err != nil {
 		return fmt.Errorf("initializing server: %w", err)
