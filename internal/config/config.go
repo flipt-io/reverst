@@ -142,7 +142,7 @@ func (g TunnelGroup) Validate() error {
 		if auth.Password == "" {
 			return errors.New("password must be non-empty string (when auth-type == basic)")
 		}
-	case "token":
+	case "bearer", "token":
 		if auth.Token == "" &&
 			auth.TokenPath == "" &&
 			auth.HashedToken == "" &&
