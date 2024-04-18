@@ -155,7 +155,7 @@ func (s *Server) register() error {
 
 	req := &protocol.RegisterListenerRequest{
 		Version:     protocol.Version,
-		TunnelGroup: s.TLSConfig.ServerName,
+		TunnelGroup: s.TunnelGroup,
 	}
 
 	auth := defaultAuthenticator
