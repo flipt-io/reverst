@@ -71,7 +71,7 @@ func (g TunnelGroups) AuthenticationHandler() (protocol.AuthenticationHandler, e
 			switch group.Authentication.Type {
 			case "", "basic":
 				handler = auth.HandleBasic(group.Authentication.Username, group.Authentication.Password)
-			case "token":
+			case "token", "bearer":
 				if group.Authentication.Token != "" || group.Authentication.TokenPath != "" {
 					token := group.Authentication.Token
 					if token == "" {
