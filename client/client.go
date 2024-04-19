@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -84,7 +85,7 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 	log := coallesce(s.Logger, slog.Default()).With("addr", addr)
 	log.Debug("Dialing address")
 
-	ctx, cancel := context.WithCancel(ctx)
+	newCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	tlsConf := coallesce(s.TLSConfig, DefaultTLSConfig)
@@ -100,7 +101,8 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 		tlsConf.ServerName = url.Hostname()
 	}
 
-	s.conn, err = quic.DialAddr(ctx,
+	var connMu sync.Mutex
+	s.conn, err = quic.DialAddr(newCtx,
 		addr,
 		tlsConf,
 		coallesce(s.QuicConfig, DefaultQuicConfig),
@@ -110,8 +112,11 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 	}
 
 	defer func() {
+		connMu.Lock()
+		defer connMu.Unlock()
+
 		if s.conn != nil {
-			s.conn.CloseWithError(0, "")
+			s.conn.CloseWithError(protocol.ApplicationOK, "")
 			s.conn = nil
 		}
 	}()
@@ -125,6 +130,17 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 
 	log.Info("Starting server")
 
+	go func() {
+		<-newCtx.Done()
+
+		connMu.Lock()
+		defer connMu.Unlock()
+
+		if s.conn != nil {
+			s.conn.CloseWithError(protocol.ApplicationOK, context.Cause(newCtx).Error())
+		}
+	}()
+
 	// begin serving HTTP requests
 	if err := (&http3.Server{Handler: s.Handler}).ServeQUICConn(s.conn); err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -133,10 +149,22 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 
 		var aerr *quic.ApplicationError
 		if errors.As(err, &aerr) {
-			if aerr.ErrorCode == 0x0 {
+			switch aerr.ErrorCode {
+			case protocol.ApplicationOK:
 				return nil
+			case protocol.ApplicationError:
+				connMu.Lock()
+				s.conn = nil
+				connMu.Unlock()
+				cancel()
+
+				log.Debug("Attempting to reconnect")
+
+				return s.DialAndServe(ctx, addr)
 			}
 		}
+
+		return err
 	}
 
 	return nil
@@ -201,5 +229,5 @@ func (s *Server) Close() error {
 		s.conn = nil
 	}()
 
-	return s.conn.CloseWithError(0, "")
+	return s.conn.CloseWithError(protocol.ApplicationOK, "")
 }

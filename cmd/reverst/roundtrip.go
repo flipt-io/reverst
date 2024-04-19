@@ -162,10 +162,26 @@ type roundRobbinTripper struct {
 	set roundrobbin.Set[http.RoundTripper]
 }
 
-func (r *roundRobbinTripper) register(conn quic.EarlyConnection) {
-	r.set.Register(conn.Context(), &http3.RoundTripper{
+func (r *roundRobbinTripper) register(first quic.EarlyConnection) {
+	// connection can only be safely used once as the calling
+	// client will establish a h3 session (control stream) after each dial
+	// which can only be safely done once
+	conns := make(chan quic.EarlyConnection, 1)
+	conns <- first
+	close(conns)
+
+	r.set.Register(first.Context(), &http3.RoundTripper{
 		Dial: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
-			return conn, nil
+			slog.Debug("Dial", "addr", addr, "remote_addr", first.RemoteAddr())
+
+			conn, ok := <-conns
+			if ok {
+				return conn, nil
+			}
+
+			first.CloseWithError(protocol.ApplicationError, "Connection closing")
+
+			return nil, net.ErrClosed
 		},
 	})
 }
@@ -176,10 +192,35 @@ func (r *roundRobbinTripper) RoundTrip(req *http.Request) (*http.Response, error
 		_ = req.Body.Close()
 	}()
 
-	rt, ok := r.set.Next(req.Context())
-	if !ok {
-		return nil, net.ErrClosed
-	}
+	for {
+		rt, ok, err := r.set.Next(req.Context())
+		if err != nil {
+			// can only be context error
+			continue
+		}
 
-	return rt.RoundTrip(req)
+		if !ok {
+			return nil, net.ErrClosed
+		}
+
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				r.set.Remove(rt)
+				continue
+			}
+		}
+
+		if errors.Is(err, context.Canceled) {
+			slog.Debug("RoundTrip", "error", err)
+
+			return &http.Response{
+				Request:    req,
+				StatusCode: http.StatusInternalServerError,
+				Body:       nil,
+			}, nil
+		}
+
+		return resp, err
+	}
 }

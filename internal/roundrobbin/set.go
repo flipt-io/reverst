@@ -26,35 +26,39 @@ func (s *Set[T]) Register(ctx context.Context, t T) {
 	go func() {
 		select {
 		case <-ctx.Done():
-			s.mu.Lock()
-			defer func() {
-				s.mu.Unlock()
-
-				if s.evicted != nil {
-					s.evicted(t)
-				}
-			}()
-
-			slog.Debug("roundrobbin set: removing entry")
-
-			s.entries = slices.DeleteFunc(s.entries, func(rt T) bool {
-				return rt == t
-			})
+			s.Remove(t)
 		}
 	}()
 }
 
-func (s *Set[T]) Next(ctx context.Context) (t T, ok bool) {
+func (s *Set[T]) Remove(t T) {
+	s.mu.Lock()
+	defer func() {
+		s.mu.Unlock()
+
+		if s.evicted != nil {
+			s.evicted(t)
+		}
+	}()
+
+	slog.Debug("roundrobbin set: removing entry")
+
+	s.entries = slices.DeleteFunc(s.entries, func(rt T) bool {
+		return rt == t
+	})
+}
+
+func (s *Set[T]) Next(ctx context.Context) (t T, ok bool, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	if len(s.entries) == 0 {
-		return t, false
+		return t, false, nil
 	}
 
 	for {
 		if err := ctx.Err(); err != nil {
-			return t, false
+			return t, false, err
 		}
 
 		var (
@@ -66,7 +70,7 @@ func (s *Set[T]) Next(ctx context.Context) (t T, ok bool) {
 		}
 
 		if s.last.CompareAndSwap(cur, next) {
-			return s.entries[cur], true
+			return s.entries[cur], true, nil
 		}
 	}
 }

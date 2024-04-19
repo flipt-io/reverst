@@ -34,3 +34,6 @@ require (
 	golang.org/x/tools v0.16.1 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
+
+// reuse until we have a resolution over https://github.com/quic-go/quic-go/pull/4448
+replace github.com/quic-go/quic-go => github.com/georgemac/quic-go v0.0.0-20240419130944-4ec9693e613d
