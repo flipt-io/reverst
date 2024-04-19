@@ -33,7 +33,8 @@ func Test_Set(t *testing.T) {
 	)
 
 	for range expected {
-		v, ok := set.Next(context.Background())
+		v, ok, err := set.Next(context.Background())
+		require.NoError(t, err)
 		require.True(t, ok, "value unexpectedly not found")
 		found = append(found, v)
 	}
@@ -57,7 +58,8 @@ func Test_Set(t *testing.T) {
 	found = []string{}
 
 	for range expected {
-		v, ok := set.Next(context.Background())
+		v, ok, err := set.Next(context.Background())
+		require.NoError(t, err)
 		require.True(t, ok, "value unexpectedly not found")
 		found = append(found, v)
 	}

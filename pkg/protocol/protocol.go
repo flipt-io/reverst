@@ -22,6 +22,18 @@ const (
 	CodeServerError
 )
 
+// ApplicationCode is returned on stream and connection errors
+type ApplicationCode int
+
+const (
+	// ApplicationOK is returned when the stream or connection is being closed
+	// intentionally with no error as the client is going away
+	ApplicationOK = 0x0
+	// ApplicationError is returned when something went wrong
+	// The client can attempt to reconnect in this situation
+	ApplicationError = 0x1
+)
+
 type RegisterListenerRequest struct {
 	Version     uint8
 	TunnelGroup string

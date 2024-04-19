@@ -8,6 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/peterbourgon/ff/v4"
 	"github.com/peterbourgon/ff/v4/ffhelp"
@@ -43,9 +46,19 @@ func main() {
 		},
 	}
 
-	if err := cmd.ParseAndRun(context.Background(), os.Args[1:],
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+
+	if err := cmd.ParseAndRun(ctx, os.Args[1:],
 		ff.WithEnvVarPrefix("REVERST"),
 	); err != nil {
+		if errors.Is(err, http.ErrServerClosed) {
+			return
+		}
+
 		fmt.Fprintf(os.Stderr, "%s\n", ffhelp.Command(cmd))
 		if !errors.Is(err, ff.ErrHelp) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -56,8 +69,6 @@ func main() {
 }
 
 func runServer(ctx context.Context, conf config.Config) error {
-	slog.Info("QUIC listener starting...", "addr", conf.TunnelAddress)
-
 	tlsCert, err := tls.LoadX509KeyPair(conf.CertificatePath, conf.PrivateKeyPath)
 	if err != nil {
 		panic(err)
@@ -100,8 +111,32 @@ func runServer(ctx context.Context, conf config.Config) error {
 	}
 
 	server := newServer(conf.TunnelAddress, handler, groups)
+	httpServer := &http.Server{
+		Addr:    conf.HTTPAddress,
+		Handler: server,
+	}
+
 	go func() {
+		<-ctx.Done()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		httpServer.Shutdown(ctx)
+	}()
+
+	slog.Info("QUIC tunnel listener starting...", "addr", httpServer.Addr)
+
+	ch := make(chan struct{})
+	go func() {
+		defer close(ch)
+
 		for {
+			if err := ctx.Err(); err != nil {
+				slog.Info("Stopping tunnel listener")
+				return
+			}
+
 			conn, err := listener.Accept(ctx)
 			if err != nil {
 				slog.Error("Error accepting connection", "error", err)
@@ -124,11 +159,27 @@ func runServer(ctx context.Context, conf config.Config) error {
 				continue
 			}
 
+			go func() {
+				<-ctx.Done()
+				conn.CloseWithError(protocol.ApplicationOK, "server closing down")
+			}()
+
 			slog.Debug("Server registered")
 		}
 	}()
 
-	slog.Info("HTTP listener starting...", "addr", conf.HTTPAddress)
+	slog.Info("HTTP listener starting...", "addr", httpServer.Addr)
 
-	return http.ListenAndServe(conf.HTTPAddress, server)
+	if err := httpServer.ListenAndServe(); err != nil {
+		if !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+	}
+
+	select {
+	case <-ch:
+		return nil
+	case <-time.After(5 * time.Second):
+		return errors.New("deadline exceeded waiting for tunnel server shutdown")
+	}
 }
