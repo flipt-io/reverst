@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -63,8 +62,6 @@ type Server struct {
 	// OnConnectionReady is called when the server has successfully
 	// registered itself with the upstream tunnel server
 	OnConnectionReady func(protocol.RegisterListenerResponse)
-
-	conn quic.Connection
 }
 
 func coallesce[T any](v, d *T) *T {
@@ -75,19 +72,7 @@ func coallesce[T any](v, d *T) *T {
 	return v
 }
 
-// DialAndServe dials out to the provided address and attempts to register the server
-// as a listener on the remote tunnel group.
-func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
-	if s.conn != nil {
-		return errors.New("server already running")
-	}
-
-	log := coallesce(s.Logger, slog.Default()).With("addr", addr)
-	log.Debug("Dialing address")
-
-	newCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
+func (s *Server) getTLSConfig(addr string) (*tls.Config, error) {
 	tlsConf := coallesce(s.TLSConfig, DefaultTLSConfig)
 	if tlsConf.ServerName == "" {
 		// if the TLS ServerName is not explicitly supplied
@@ -95,14 +80,30 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 		// defined on that instead
 		url, err := url.Parse(addr)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		tlsConf.ServerName = url.Hostname()
 	}
 
-	var connMu sync.Mutex
-	s.conn, err = quic.DialAddr(newCtx,
+	return tlsConf, nil
+}
+
+// DialAndServe dials out to the provided address and attempts to register the server
+// as a listener on the remote tunnel group.
+func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
+	log := coallesce(s.Logger, slog.Default()).With("addr", addr)
+	log.Debug("Dialing address")
+
+	tlsConf, err := s.getTLSConfig(addr)
+	if err != nil {
+		return err
+	}
+
+	newCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	conn, err := quic.DialAddr(newCtx,
 		addr,
 		tlsConf,
 		coallesce(s.QuicConfig, DefaultQuicConfig),
@@ -111,38 +112,23 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 		return err
 	}
 
-	defer func() {
-		connMu.Lock()
-		defer connMu.Unlock()
+	go func() {
+		<-newCtx.Done()
 
-		if s.conn != nil {
-			s.conn.CloseWithError(protocol.ApplicationOK, "")
-			s.conn = nil
-		}
+		_ = conn.CloseWithError(protocol.ApplicationOK, "")
 	}()
 
 	log.Debug("Attempting to register")
 
 	// register server as a listener on remote tunnel
-	if err := s.register(); err != nil {
+	if err := s.register(conn); err != nil {
 		return err
 	}
 
 	log.Info("Starting server")
 
-	go func() {
-		<-newCtx.Done()
-
-		connMu.Lock()
-		defer connMu.Unlock()
-
-		if s.conn != nil {
-			s.conn.CloseWithError(protocol.ApplicationOK, context.Cause(newCtx).Error())
-		}
-	}()
-
 	// begin serving HTTP requests
-	if err := (&http3.Server{Handler: s.Handler}).ServeQUICConn(s.conn); err != nil {
+	if err := (&http3.Server{Handler: s.Handler}).ServeQUICConn(conn); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
@@ -153,11 +139,6 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 			case protocol.ApplicationOK:
 				return nil
 			case protocol.ApplicationError:
-				connMu.Lock()
-				s.conn = nil
-				connMu.Unlock()
-				cancel()
-
 				log.Debug("Attempting to reconnect")
 
 				return s.DialAndServe(ctx, addr)
@@ -170,8 +151,8 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 	return nil
 }
 
-func (s *Server) register() error {
-	stream, err := s.conn.OpenStream()
+func (s *Server) register(conn quic.Connection) error {
+	stream, err := conn.OpenStream()
 	if err != nil {
 		return fmt.Errorf("accepting stream: %w", err)
 	}
@@ -216,18 +197,4 @@ func (s *Server) register() error {
 	}
 
 	return nil
-}
-
-// Close closing any open connections and releases associated resources.
-// This should be called to properly teardown the connection.
-func (s *Server) Close() error {
-	if s.conn == nil {
-		return nil
-	}
-
-	defer func() {
-		s.conn = nil
-	}()
-
-	return s.conn.CloseWithError(protocol.ApplicationOK, "")
 }

@@ -76,6 +76,8 @@ func (m *Reverst) TestUnit(
 func (m *Reverst) TestIntegration(
 	ctx context.Context,
 	source *dagger.Directory,
+	//+optional
+	verbose bool,
 ) (string, error) {
 	ctr, err := m.BuildContainer(ctx, source)
 	if err != nil {
@@ -119,13 +121,18 @@ func (m *Reverst) TestIntegration(
 		WithExec(nil).
 		AsService()
 
+	cmd := []string{"go", "test", "./internal/test/...", "-integration"}
+	if verbose {
+		cmd = append(cmd, "-v")
+	}
+
 	out, err := dag.Container().
 		From("golang:1.21-alpine3.18").
 		WithServiceBinding("local.example", reverst).
 		With(dag.Go().GlobalCache).
 		WithMountedDirectory("/src", source).
 		WithWorkdir("/src").
-		WithExec([]string{"go", "test", "./internal/test/...", "-integration"}).
+		WithExec(cmd).
 		Stdout(ctx)
 	if err != nil {
 		return out, err
