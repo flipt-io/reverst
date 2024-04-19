@@ -125,7 +125,7 @@ func runServer(ctx context.Context, conf config.Config) error {
 		httpServer.Shutdown(ctx)
 	}()
 
-	slog.Info("QUIC tunnel listener starting...", "addr", httpServer.Addr)
+	slog.Info("QUIC tunnel listener starting...", "addr", conf.TunnelAddress)
 
 	ch := make(chan struct{})
 	go func() {
