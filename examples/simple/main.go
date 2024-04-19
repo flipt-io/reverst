@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,10 +16,11 @@ import (
 )
 
 var (
-	srvName = flag.String("server-name", "flipt.dev.local", "Server name to advertise")
-	addr    = flag.String("addr", "127.0.0.1:7171", "Address on which to connect and establish tunnel")
-	user    = flag.String("username", "", "username for basic authentication")
-	passw   = flag.String("password", "", "password for basic authentication")
+	srvName  = flag.String("server-name", "flipt.dev.local", "Server name to advertise")
+	addr     = flag.String("addr", "127.0.0.1:7171", "Address on which to connect and establish tunnel")
+	user     = flag.String("user", "", "username for basic authentication")
+	password = flag.String("password", "", "password for basic authentication")
+	token    = flag.String("token", "", "token for bearer authentication")
 )
 
 func main() {
@@ -32,20 +34,28 @@ func main() {
 		Level: slog.LevelDebug,
 	})))
 
+	host, _, err := net.SplitHostPort(*addr)
+	if err != nil {
+		panic(err)
+	}
+
+	slog.Info("Connecting to tunnel", "tunnelGroup", host)
+
 	server := &client.Server{
-		TunnelGroup: *srvName,
+		TunnelGroup: host,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("PONG"))
 		}),
 		TLSConfig: &tls.Config{
-			InsecureSkipVerify: true,
-			NextProtos:         []string{protocol.Name},
-			ServerName:         *srvName,
+			NextProtos: []string{protocol.Name},
+			ServerName: *srvName,
 		},
 	}
 
 	if *user != "" {
-		server.Authenticator = client.BasicAuthenticator(*user, *passw)
+		server.Authenticator = client.BasicAuthenticator(*user, *password)
+	} else if *token != "" {
+		server.Authenticator = client.BearerAuthenticator(*token)
 	}
 
 	var group errgroup.Group
@@ -65,9 +75,7 @@ func main() {
 
 	stop()
 
-	if err := server.Close(); err != nil {
-		slog.Error("Failure on server close", "error", err)
-	}
+	cancel()
 
 	if err := group.Wait(); err != nil {
 		slog.Error("Error on shutdown", "error", err)
