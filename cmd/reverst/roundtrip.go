@@ -98,6 +98,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	_, err = io.Copy(w, resp.Body)
+
+	for k, v := range resp.Trailer {
+		w.Header()[k] = v
+	}
 }
 
 func (s *Server) Register(conn quic.EarlyConnection) error {
