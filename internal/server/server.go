@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -16,10 +18,11 @@ import (
 	"go.flipt.io/reverst/internal/config"
 	"go.flipt.io/reverst/internal/roundrobbin"
 	"go.flipt.io/reverst/pkg/protocol"
+	"gopkg.in/yaml.v2"
 )
 
 type Server struct {
-	address string
+	conf    config.Config
 	handler protocol.AuthenticationHandler
 
 	// trippers maps tunnel group identifiers onto roundRobbinTripper instances
@@ -29,9 +32,30 @@ type Server struct {
 }
 
 // New constructs and configures a new reverst Server.
-func New(address string, handler protocol.AuthenticationHandler, groups config.TunnelGroups) *Server {
+func New(conf config.Config) (*Server, error) {
+	fi, err := os.Open(conf.TunnelGroupsPath)
+	if err != nil {
+		return nil, fmt.Errorf("initializing server: %w", err)
+	}
+
+	defer fi.Close()
+
+	var groups config.TunnelGroups
+	if err := yaml.NewDecoder(fi).Decode(&groups); err != nil {
+		return nil, fmt.Errorf("initializing server: %w", err)
+	}
+
+	if err := groups.Validate(); err != nil {
+		return nil, fmt.Errorf("validating tunnel groups: %w", err)
+	}
+
+	handler, err := groups.AuthenticationHandler()
+	if err != nil {
+		return nil, fmt.Errorf("initializing server: %w", err)
+	}
+
 	s := &Server{
-		address:  address,
+		conf:     conf,
 		handler:  handler,
 		trippers: map[string]*roundRobbinTripper{},
 		clients:  map[string]*http.Client{},
@@ -52,7 +76,101 @@ func New(address string, handler protocol.AuthenticationHandler, groups config.T
 		}
 	}
 
-	return s
+	return s, nil
+}
+
+func (s *Server) ListenAndServe(ctx context.Context) error {
+	tlsCert, err := tls.LoadX509KeyPair(s.conf.CertificatePath, s.conf.PrivateKeyPath)
+	if err != nil {
+		panic(err)
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		NextProtos:   []string{protocol.Name},
+		ServerName:   s.conf.ServerName,
+	}
+
+	listener, err := quic.ListenAddrEarly(s.conf.TunnelAddress, tlsConfig, &quic.Config{
+		MaxIdleTimeout:  s.conf.KeepAlivePeriod,
+		KeepAlivePeriod: s.conf.MaxIdleTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+
+	httpServer := &http.Server{
+		Addr:    s.conf.HTTPAddress,
+		Handler: s,
+	}
+
+	go func() {
+		<-ctx.Done()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		httpServer.Shutdown(ctx)
+	}()
+
+	slog.Info("QUIC tunnel listener starting...", "addr", s.conf.TunnelAddress)
+
+	ch := make(chan struct{})
+	go func() {
+		defer close(ch)
+
+		for {
+			if err := ctx.Err(); err != nil {
+				slog.Info("Stopping tunnel listener")
+				return
+			}
+
+			conn, err := listener.Accept(ctx)
+			if err != nil {
+				slog.Error("Error accepting connection", "error", err)
+				continue
+			}
+
+			slog.Debug("Accepted connection", "version", conn.ConnectionState().Version)
+
+			if err := s.register(conn); err != nil {
+				level := slog.LevelError
+				if errors.Is(err, auth.ErrUnauthorized) {
+					level = slog.LevelDebug
+				}
+
+				// close connection with error
+				conn.CloseWithError(1, err.Error())
+
+				slog.Log(ctx, level, "Registering connection", "error", err)
+
+				continue
+			}
+
+			go func() {
+				<-ctx.Done()
+				conn.CloseWithError(protocol.ApplicationOK, "server closing down")
+			}()
+
+			slog.Debug("Server registered")
+		}
+	}()
+
+	slog.Info("HTTP listener starting...", "addr", httpServer.Addr)
+
+	if err := httpServer.ListenAndServe(); err != nil {
+		if !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+	}
+
+	select {
+	case <-ch:
+		return nil
+	case <-time.After(5 * time.Second):
+		return errors.New("deadline exceeded waiting for tunnel server shutdown")
+	}
 }
 
 // ServeHTTP proxies requests onto tunnel endpoints based on the presence
@@ -86,7 +204,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	r = r.Clone(r.Context())
 	r.URL.Scheme = "https"
-	r.URL.Host = s.address
+	r.URL.Host = s.conf.TunnelAddress
 	r.RequestURI = ""
 
 	resp, err := client.Do(r)
@@ -109,8 +227,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Register adds a newly accepted connection onto the identified target tunnel group.
-func (s *Server) Register(conn quic.EarlyConnection) error {
+// register adds a newly accepted connection onto the identified target tunnel group.
+func (s *Server) register(conn quic.EarlyConnection) error {
 	stream, err := conn.AcceptStream(conn.Context())
 	if err != nil {
 		return fmt.Errorf("accepting stream: %w", err)
