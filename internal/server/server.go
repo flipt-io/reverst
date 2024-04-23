@@ -6,18 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
+	"strconv"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"go.flipt.io/reverst/internal/auth"
 	"go.flipt.io/reverst/internal/config"
 	"go.flipt.io/reverst/internal/roundrobbin"
 	"go.flipt.io/reverst/pkg/protocol"
+	"go.opentelemetry.io/otel/attribute"
+	prom "go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"gopkg.in/yaml.v2"
 )
 
@@ -29,6 +39,10 @@ type Server struct {
 	trippers map[string]*roundRobbinTripper
 	// clients maps host names onto target clients
 	clients map[string]*http.Client
+
+	tunnelGroupRegistrationsTotal metric.Int64Counter
+	proxyRequestsHandledTotal     metric.Int64Counter
+	proxyRequestsLatency          metric.Float64Histogram
 }
 
 // New constructs and configures a new reverst Server.
@@ -60,11 +74,50 @@ func New(conf config.Config) (*Server, error) {
 		trippers: map[string]*roundRobbinTripper{},
 		clients:  map[string]*http.Client{},
 	}
+	meter := noop.NewMeterProvider().Meter(meterName)
+	if conf.ManagementAddress != "" {
+		exporter, err := prom.New()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
+		meter = provider.Meter(meterName)
+	}
+
+	s.tunnelGroupRegistrationsTotal, err = meter.Int64Counter(
+		prometheus.BuildFQName(namespace, tunnelGroupSubsystem, "registrations_total"),
+		metric.WithDescription("Total number of registration attempts handled by tunnel group and status code"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	s.proxyRequestsHandledTotal, err = meter.Int64Counter(
+		prometheus.BuildFQName(namespace, proxySubsystem, "requests_total"),
+		metric.WithDescription("Total number of requests handled by host and response code"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	s.proxyRequestsLatency, err = meter.Float64Histogram(
+		prometheus.BuildFQName(namespace, proxySubsystem, "requests_latency"),
+		metric.WithDescription("Latency of requests per host and response code"),
+		metric.WithUnit("ms"),
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	for name, group := range groups.Groups {
 		slog.Debug("Registering tunnel group", "name", name, "hosts", group.Hosts)
 
-		tripper := &roundRobbinTripper{}
+		tripper, err := newRoundRobbinTipper(meter, name)
+		if err != nil {
+			return nil, err
+		}
+
 		s.trippers[name] = tripper
 
 		client := &http.Client{
@@ -99,20 +152,6 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 	defer listener.Close()
-
-	httpServer := &http.Server{
-		Addr:    s.conf.HTTPAddress,
-		Handler: s,
-	}
-
-	go func() {
-		<-ctx.Done()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		httpServer.Shutdown(ctx)
-	}()
 
 	slog.Info("QUIC tunnel listener starting...", "addr", s.conf.TunnelAddress)
 
@@ -157,6 +196,32 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 	}()
 
+	if s.conf.ManagementAddress != "" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+		go http.ListenAndServe(s.conf.ManagementAddress, mux)
+	}
+
+	httpServer := &http.Server{
+		Addr:    s.conf.HTTPAddress,
+		Handler: s,
+	}
+
+	go func() {
+		<-ctx.Done()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		httpServer.Shutdown(ctx)
+	}()
+
 	slog.Info("HTTP listener starting...", "addr", httpServer.Addr)
 
 	if err := httpServer.ListenAndServe(); err != nil {
@@ -178,14 +243,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // These headers are used to identify the target tunnel group and then the request
 // is forwarded onto the next available connection in a round-robbin sequence.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now().UTC()
+
 	log := slog.With("method", r.Method, "path", r.URL.Path)
 	log.Debug("Handling request")
 
 	var err error
-	defer func() {
-		log.Debug("Finished handling request", "error", err)
-	}()
-
 	host, _, err := net.SplitHostPort(r.Host)
 	if err != nil {
 		host = r.Host
@@ -194,6 +257,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
 		host = forwarded
 	}
+
+	wr := interceptStatus(w)
+	w = wr
+
+	defer func() {
+		attrs := attribute.NewSet(
+			hostKey.String(host),
+			statusKey.String(statusCodeToLabel(wr.StatusCode())),
+		)
+		s.proxyRequestsHandledTotal.Add(r.Context(), 1, metric.WithAttributeSet(attrs))
+		s.proxyRequestsLatency.Record(r.Context(), float64(time.Since(start))/1e6, metric.WithAttributeSet(attrs))
+		log.Debug("Finished handling request", "error", err)
+	}()
 
 	client, ok := s.clients[host]
 	if !ok {
@@ -209,7 +285,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.Do(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		log.Error("Performing round trip", "error", err)
+		http.Error(w, "bad gateway", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -228,7 +305,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // register adds a newly accepted connection onto the identified target tunnel group.
-func (s *Server) register(conn quic.EarlyConnection) error {
+func (s *Server) register(conn quic.EarlyConnection) (err error) {
 	stream, err := conn.AcceptStream(conn.Context())
 	if err != nil {
 		return fmt.Errorf("accepting stream: %w", err)
@@ -244,32 +321,43 @@ func (s *Server) register(conn quic.EarlyConnection) error {
 		return fmt.Errorf("decoding register listener request: %w", err)
 	}
 
-	enc := protocol.NewEncoder[protocol.RegisterListenerResponse](stream)
-	defer enc.Close()
+	w := &responseWriter{enc: protocol.NewEncoder[protocol.RegisterListenerResponse](stream)}
+	defer func() {
+		w.enc.Close()
+
+		code := protocol.CodeServerError
+		if w != nil {
+			code = w.code
+		}
+		s.tunnelGroupRegistrationsTotal.Add(
+			context.Background(),
+			1,
+			metric.WithAttributes(
+				tunnelGroupKey.String(req.TunnelGroup),
+				statusKey.String(code.String()),
+			),
+		)
+	}()
 
 	if err := s.handler.Authenticate(&req); err != nil {
+		code := protocol.CodeServerError
 		if errors.Is(err, auth.ErrUnauthorized) {
-			writeError(enc, err, protocol.CodeUnauthorized)
+			code = protocol.CodeUnauthorized
 			return err
 		}
 
-		writeError(enc, err, protocol.CodeServerError)
+		_ = w.write(err, code)
 		return err
 	}
 
 	tripper, ok := s.trippers[req.TunnelGroup]
 	if !ok {
 		err := fmt.Errorf("tunnel group unknown: %q", req.TunnelGroup)
-		writeError(enc, err, protocol.CodeBadRequest)
+		_ = w.write(err, protocol.CodeBadRequest)
 		return err
 	}
 
-	resp := &protocol.RegisterListenerResponse{
-		Version: protocol.Version,
-		Code:    protocol.CodeOK,
-	}
-
-	if err := enc.Encode(resp); err != nil {
+	if err := w.write(nil, protocol.CodeOK); err != nil {
 		return fmt.Errorf("encoding register listener response: %w", err)
 	}
 
@@ -278,19 +366,60 @@ func (s *Server) register(conn quic.EarlyConnection) error {
 	return nil
 }
 
-func writeError(enc protocol.Encoder[protocol.RegisterListenerResponse], err error, code protocol.ResponseCode) {
-	_ = enc.Encode(&protocol.RegisterListenerResponse{
+type responseWriter struct {
+	enc  protocol.Encoder[protocol.RegisterListenerResponse]
+	code protocol.ResponseCode
+}
+
+func (w *responseWriter) write(err error, code protocol.ResponseCode) error {
+	resp := &protocol.RegisterListenerResponse{
 		Version: protocol.Version,
 		Code:    code,
-		Body:    []byte(err.Error()),
-	})
+	}
+
+	if err != nil {
+		resp.Body = []byte(err.Error())
+	}
+
+	return w.enc.Encode(resp)
 }
 
 type roundRobbinTripper struct {
-	set roundrobbin.Set[http.RoundTripper]
+	set *roundrobbin.Set[http.RoundTripper]
+
+	activeConnectionsCount metric.Int64UpDownCounter
+
+	attrs attribute.Set
+}
+
+func newRoundRobbinTipper(meter metric.Meter, tunnelGroup string) (_ *roundRobbinTripper, err error) {
+	tr := roundRobbinTripper{
+		attrs: attribute.NewSet(tunnelGroupKey.String(tunnelGroup)),
+	}
+
+	tr.activeConnectionsCount, err = meter.Int64UpDownCounter(
+		prometheus.BuildFQName(namespace, tunnelGroupSubsystem, "active_conn"),
+		metric.WithDescription("Number of active connections in the tunnel group"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	tr.set = roundrobbin.NewSet[http.RoundTripper](
+		roundrobbin.WithOnEvict(func(http.RoundTripper) {
+			tr.activeConnectionsCount.Add(
+				context.Background(),
+				-1,
+				metric.WithAttributeSet(tr.attrs),
+			)
+		}),
+	)
+
+	return &tr, nil
 }
 
 func (r *roundRobbinTripper) register(first quic.EarlyConnection) {
+	defer r.activeConnectionsCount.Add(context.Background(), 1, metric.WithAttributeSet(r.attrs))
 	// connection can only be safely used once as the calling
 	// client will establish a h3 session (control stream) after each dial
 	// which can only be safely done once
@@ -341,4 +470,56 @@ func (r *roundRobbinTripper) RoundTrip(req *http.Request) (*http.Response, error
 
 		return resp, err
 	}
+}
+
+// statusCodeToLabel normalize HTTP status codes into string labels
+// 100s to 1XX
+// 200s to 2XX
+// and so on
+func statusCodeToLabel(code int) string {
+	if code == 0 {
+		return "2XX"
+	}
+
+	if c := strconv.Itoa(code); len(c) > 0 {
+		return c[:1] + "XX"
+	}
+
+	return "0XX"
+}
+
+type statusCodeResponseWriter interface {
+	http.ResponseWriter
+	StatusCode() int
+}
+
+func interceptStatus(w http.ResponseWriter) statusCodeResponseWriter {
+	i := &statusInterceptResponseWriter{ResponseWriter: w}
+	if _, ok := w.(io.ReaderFrom); !ok {
+		return i
+	}
+
+	return readerFromDecorator{i}
+}
+
+type readerFromDecorator struct {
+	*statusInterceptResponseWriter
+}
+
+func (d readerFromDecorator) ReadFrom(r io.Reader) (n int64, err error) {
+	return d.ResponseWriter.(io.ReaderFrom).ReadFrom(r)
+}
+
+type statusInterceptResponseWriter struct {
+	http.ResponseWriter
+
+	code int
+}
+
+func (s *statusInterceptResponseWriter) WriteHeader(code int) {
+	s.code = code
+}
+
+func (s *statusInterceptResponseWriter) StatusCode() int {
+	return s.code
 }

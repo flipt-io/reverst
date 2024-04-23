@@ -21,6 +21,9 @@ type Config struct {
 	PrivateKeyPath   string `ff:" short=k | long=private-key-path |                            usage: path to TLS private key PEM file (required)            "`
 	CertificatePath  string `ff:" short=c | long=certificate-path |                            usage: path to TLS certificate PEM file (required)            "`
 
+	// ManagementAddress is where reverst hosts introspective APIs for telemetry and debugging etc.
+	ManagementAddress string `ff:" long=management-address | usage: HTTP address for managment API "`
+
 	MaxIdleTimeout  time.Duration `ff:" long=max-idle-timeout  | default=1m  | usage: maximum time a connection can be idle "`
 	KeepAlivePeriod time.Duration `ff:" long=keep-alive-period | default=30s | usage: period between keep-alive events      "`
 }

@@ -15,6 +15,22 @@ type Set[T comparable] struct {
 	evicted func(T)
 }
 
+func WithOnEvict[T comparable](fn func(T)) func(*Set[T]) {
+	return func(s *Set[T]) {
+		s.evicted = fn
+	}
+}
+
+func NewSet[T comparable](opts ...func(*Set[T])) *Set[T] {
+	set := &Set[T]{}
+
+	for _, opt := range opts {
+		opt(set)
+	}
+
+	return set
+}
+
 func (s *Set[T]) Register(ctx context.Context, t T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
