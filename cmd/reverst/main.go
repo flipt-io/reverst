@@ -17,6 +17,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"go.flipt.io/reverst/internal/auth"
 	"go.flipt.io/reverst/internal/config"
+	"go.flipt.io/reverst/internal/server"
 	"go.flipt.io/reverst/pkg/protocol"
 	"gopkg.in/yaml.v3"
 )
@@ -110,7 +111,7 @@ func runServer(ctx context.Context, conf config.Config) error {
 		return fmt.Errorf("initializing server: %w", err)
 	}
 
-	server := newServer(conf.TunnelAddress, handler, groups)
+	server := server.New(conf.TunnelAddress, handler, groups)
 	httpServer := &http.Server{
 		Addr:    conf.HTTPAddress,
 		Handler: server,

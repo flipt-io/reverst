@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -28,7 +28,8 @@ type Server struct {
 	clients map[string]*http.Client
 }
 
-func newServer(address string, handler protocol.AuthenticationHandler, groups config.TunnelGroups) *Server {
+// New constructs and configures a new reverst Server.
+func New(address string, handler protocol.AuthenticationHandler, groups config.TunnelGroups) *Server {
 	s := &Server{
 		address:  address,
 		handler:  handler,
@@ -54,6 +55,10 @@ func newServer(address string, handler protocol.AuthenticationHandler, groups co
 	return s
 }
 
+// ServeHTTP proxies requests onto tunnel endpoints based on the presence
+// of and targets defined in the requests X-Forwarded-Host or Host headers.
+// These headers are used to identify the target tunnel group and then the request
+// is forwarded onto the next available connection in a round-robbin sequence.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log := slog.With("method", r.Method, "path", r.URL.Path)
 	log.Debug("Handling request")
@@ -104,6 +109,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Register adds a newly accepted connection onto the identified target tunnel group.
 func (s *Server) Register(conn quic.EarlyConnection) error {
 	stream, err := conn.AcceptStream(conn.Context())
 	if err != nil {
@@ -213,16 +219,6 @@ func (r *roundRobbinTripper) RoundTrip(req *http.Request) (*http.Response, error
 				r.set.Remove(rt)
 				continue
 			}
-		}
-
-		if errors.Is(err, context.Canceled) {
-			slog.Debug("RoundTrip", "error", err)
-
-			return &http.Response{
-				Request:    req,
-				StatusCode: http.StatusInternalServerError,
-				Body:       nil,
-			}, nil
 		}
 
 		return resp, err
