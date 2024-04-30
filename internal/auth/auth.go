@@ -6,7 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"strings"
 
 	"go.flipt.io/reverst/pkg/protocol"
@@ -22,8 +26,10 @@ func HandleBasic(username, password string) protocol.AuthenticationHandler {
 	expectedUsername := safeComparator(username)
 	expectedPassword := safeComparator(password)
 
+	log := slog.With("auth_type", "basic")
+
 	return protocol.AuthenticationHandlerFunc(func(rlr *protocol.RegisterListenerRequest) error {
-		log := slog.With("tunnel_group", rlr.TunnelGroup)
+		log := log.With("tunnel_group", rlr.TunnelGroup)
 
 		cred, err := parseAuthorization(rlr, "Basic ")
 		if err != nil {
@@ -56,8 +62,10 @@ func HandleBasic(username, password string) protocol.AuthenticationHandler {
 func HandleBearer(token string) protocol.AuthenticationHandler {
 	expectedToken := safeComparator(token)
 
+	log := slog.With("auth_type", "bearer")
+
 	return protocol.AuthenticationHandlerFunc(func(rlr *protocol.RegisterListenerRequest) error {
-		log := slog.With("tunnel_group", rlr.TunnelGroup)
+		log := log.With("tunnel_group", rlr.TunnelGroup)
 
 		token, err := parseAuthorization(rlr, "Bearer ")
 		if err != nil {
@@ -82,8 +90,10 @@ func HandleBearerHashed(hashedToken string) (protocol.AuthenticationHandler, err
 		return nil, err
 	}
 
+	log := slog.With("auth_type", "bearer_hashed")
+
 	return protocol.AuthenticationHandlerFunc(func(rlr *protocol.RegisterListenerRequest) error {
-		log := slog.With("tunnel_group", rlr.TunnelGroup)
+		log := log.With("tunnel_group", rlr.TunnelGroup)
 
 		token, err := parseAuthorization(rlr, "Bearer ")
 		if err != nil {
@@ -98,6 +108,45 @@ func HandleBearerHashed(hashedToken string) (protocol.AuthenticationHandler, err
 		}
 
 		return nil
+	}), nil
+}
+
+func HandleExternalAuthorizer(addr string) (protocol.AuthenticationHandler, error) {
+	if _, err := url.Parse(addr); err != nil {
+		return nil, fmt.Errorf("building external authorizer: %w", err)
+	}
+
+	client := &http.Client{}
+
+	log := slog.With("auth_type", "external")
+
+	return protocol.AuthenticationHandlerFunc(func(rlr *protocol.RegisterListenerRequest) error {
+		log := log.With("tunnel_group", rlr.TunnelGroup)
+
+		req, err := http.NewRequest("GET", addr, nil)
+		if err != nil {
+			return err
+		}
+
+		for k, v := range rlr.Metadata {
+			req.Header.Set(k, v)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			return nil
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+
+		log.Info(unauthorizedMsg, "response", string(body), "status", resp.Status)
+
+		return ErrUnauthorized
 	}), nil
 }
 
