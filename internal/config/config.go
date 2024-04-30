@@ -104,6 +104,12 @@ func (g TunnelGroups) AuthenticationHandler() (protocol.AuthenticationHandler, e
 						return err
 					}
 				}
+			case "external":
+				var err error
+				handler, err = auth.HandleExternalAuthorizer(group.Authentication.AuthorizationEndpoint)
+				if err != nil {
+					return err
+				}
 			case "insecure":
 				handler = protocol.AuthenticationHandlerFunc(func(rlr *protocol.RegisterListenerRequest) error {
 					return nil
@@ -124,13 +130,14 @@ func (g TunnelGroups) AuthenticationHandler() (protocol.AuthenticationHandler, e
 type TunnelGroup struct {
 	Hosts          []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
 	Authentication struct {
-		Type            string `json:"type" yaml:"type"`
-		Username        string `json:"username,omitempty" yaml:"username,omitempty"`
-		Password        string `json:"password,omitempty" yaml:"password,omitempty"`
-		Token           string `json:"token,omitempty" yaml:"token,omitempty"`
-		TokenPath       string `json:"tokenPath,omitempty" yaml:"tokenPath,omitempty"`
-		HashedToken     string `json:"hashedToken,omitempty" yaml:"hashedToken,omitempty"`
-		HashedTokenPath string `json:"hashedTokenPath,omitempty" yaml:"hashedTokenPath,omitempty"`
+		Type                  string `json:"type" yaml:"type"`
+		Username              string `json:"username,omitempty" yaml:"username,omitempty"`
+		Password              string `json:"password,omitempty" yaml:"password,omitempty"`
+		Token                 string `json:"token,omitempty" yaml:"token,omitempty"`
+		TokenPath             string `json:"tokenPath,omitempty" yaml:"tokenPath,omitempty"`
+		HashedToken           string `json:"hashedToken,omitempty" yaml:"hashedToken,omitempty"`
+		HashedTokenPath       string `json:"hashedTokenPath,omitempty" yaml:"hashedTokenPath,omitempty"`
+		AuthorizationEndpoint string `json:"authorizationEndpoint,omitempty" yaml:"authorizationEndpoint,omitempty"`
 	} `json:"authentication,omitempty"`
 }
 
@@ -151,6 +158,10 @@ func (g TunnelGroup) Validate() error {
 			auth.HashedToken == "" &&
 			auth.HashedTokenPath == "" {
 			return errors.New("one of token, tokenPath, hashedToken or hashedTokenPath must be non-empty string (when auth-type == bearer)")
+		}
+	case "external":
+		if auth.AuthorizationEndpoint == "" {
+			return errors.New("authorizationEndpoint myst be non-empty string (when auth-type == external)")
 		}
 	case "insecure":
 		slog.Warn("Authentication type insecure has been chosen (requests will not be authenticated)")

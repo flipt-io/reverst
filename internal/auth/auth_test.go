@@ -1,6 +1,10 @@
 package auth
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,7 +15,32 @@ var (
 	basic           = HandleBasic("morty", "gazorpazorp")
 	bearer          = HandleBearer("plumbus")
 	bearerHashed, _ = HandleBearerHashed("34831eccb70007e3ed06bb8ba0e2c80e661c440d09fb6513c96cd1fdeb5c57cc")
+	external        protocol.AuthenticationHandler
 )
+
+func TestMain(m *testing.M) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ext/auth" {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("not found"))
+			return
+		}
+
+		if auth := r.Header.Get("Authorization"); auth != "Bearer plumbus" {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("unauthorized"))
+		}
+	}))
+	defer srv.Close()
+
+	var err error
+	external, err = HandleExternalAuthorizer(fmt.Sprintf("http://%s/ext/auth", srv.Listener.Addr().String()))
+	if err != nil {
+		panic(err)
+	}
+
+	os.Exit(m.Run())
+}
 
 func Test_Handlers(t *testing.T) {
 	for _, test := range []struct {
@@ -174,6 +203,49 @@ func Test_Handlers(t *testing.T) {
 		{
 			name:    "bearerHashed: unknown token",
 			handler: bearerHashed,
+			request: protocol.RegisterListenerRequest{
+				TunnelGroup: "sanchez",
+				Metadata: map[string]string{
+					"Authorization": "Bearer wubalubadubdub",
+				},
+			},
+			expectedErr: ErrUnauthorized,
+		},
+		{
+			name:    "external: matches",
+			handler: external,
+			request: protocol.RegisterListenerRequest{
+				TunnelGroup: "sanchez",
+				Metadata: map[string]string{
+					"Authorization": "Bearer plumbus",
+				},
+			},
+		},
+		{
+			name:    "external: missing metadata key",
+			handler: external,
+			request: protocol.RegisterListenerRequest{
+				TunnelGroup: "sanchez",
+				Metadata: map[string]string{
+					"WrongKey": "Bearer plumbus",
+				},
+			},
+			expectedErr: ErrUnauthorized,
+		},
+		{
+			name:    "external: unexpected scheme",
+			handler: external,
+			request: protocol.RegisterListenerRequest{
+				TunnelGroup: "sanchez",
+				Metadata: map[string]string{
+					"Authorization": "Unknown plumbus",
+				},
+			},
+			expectedErr: ErrUnauthorized,
+		},
+		{
+			name:    "external: unknown token",
+			handler: external,
 			request: protocol.RegisterListenerRequest{
 				TunnelGroup: "sanchez",
 				Metadata: map[string]string{
