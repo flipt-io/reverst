@@ -15,7 +15,7 @@ var (
 	basic           = HandleBasic("morty", "gazorpazorp")
 	bearer          = HandleBearer("plumbus")
 	bearerHashed, _ = HandleBearerHashed("34831eccb70007e3ed06bb8ba0e2c80e661c440d09fb6513c96cd1fdeb5c57cc")
-	external        protocol.AuthenticationHandler
+	external        Handler
 )
 
 func TestMain(m *testing.M) {
@@ -45,7 +45,7 @@ func TestMain(m *testing.M) {
 func Test_Handlers(t *testing.T) {
 	for _, test := range []struct {
 		name        string
-		handler     protocol.AuthenticationHandler
+		handler     Handler
 		request     protocol.RegisterListenerRequest
 		expectedErr error
 	}{
@@ -256,7 +256,13 @@ func Test_Handlers(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := test.handler.Authenticate(&test.request)
+			handler := Authenticator{
+				"Basic":  basic,
+				"Bearer": bearer,
+				"JWT":    external,
+			}
+
+			err := handler.Authenticate(&test.request)
 			if test.expectedErr == nil {
 				require.NoError(t, err)
 				return
@@ -272,7 +278,7 @@ func FuzzBasic(f *testing.F) {
 	f.Add("Basic th*s i% n@t b@$£64")
 	f.Add("Basic c29tZWludmFsaWQ6Y29tYmluYXRpb24=")
 	f.Fuzz(func(t *testing.T, a string) {
-		require.ErrorIs(t, basic.Authenticate(
+		require.ErrorIs(t, Authenticator{"Bearer": basic}.Authenticate(
 			&protocol.RegisterListenerRequest{
 				TunnelGroup: "sanchez",
 				Metadata: map[string]string{
@@ -288,7 +294,7 @@ func FuzzBearer(f *testing.F) {
 	f.Add("Bearer th*s i% n@t b@$£64")
 	f.Add("Bearer c29tZWludmFsaWQ6Y29tYmluYXRpb24=")
 	f.Fuzz(func(t *testing.T, a string) {
-		require.ErrorIs(t, bearer.Authenticate(
+		require.ErrorIs(t, Authenticator{"Bearer": bearer}.Authenticate(
 			&protocol.RegisterListenerRequest{
 				TunnelGroup: "sanchez",
 				Metadata: map[string]string{
@@ -304,7 +310,7 @@ func FuzzBearerHashed(f *testing.F) {
 	f.Add("Bearer th*s i% n@t b@$£64")
 	f.Add("Bearer c29tZWludmFsaWQ6Y29tYmluYXRpb24=")
 	f.Fuzz(func(t *testing.T, a string) {
-		require.ErrorIs(t, bearerHashed.Authenticate(
+		require.ErrorIs(t, Authenticator{"Bearer": bearerHashed}.Authenticate(
 			&protocol.RegisterListenerRequest{
 				TunnelGroup: "sanchez",
 				Metadata: map[string]string{

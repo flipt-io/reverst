@@ -3,6 +3,6 @@ groups:
     hosts:
     - "flipt.dev.local"
     authentication:
-      type: "basic"
-      username: "user"
-      password: "pass"
+      basic:
+        username: "user"
+        password: "pass"

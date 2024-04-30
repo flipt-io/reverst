@@ -106,9 +106,9 @@ func (m *Reverst) TestIntegration(
   "local.example":
     hosts: ["local.example"]
     authentication:
-      type: "basic"
-      username: "user"
-      password: "pass"
+      basic:
+        username: "user"
+        password: "pass"
 `,
 		}).
 		WithEnvVariable("REVERST_TUNNEL_GROUPS", "/etc/reverst/groups.yml").

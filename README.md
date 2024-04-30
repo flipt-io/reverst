@@ -146,9 +146,9 @@ groups:
     hosts:
     - "some.host.address.dev" # Host for routing inbound HTTP requests to tunnel group
     authentication:
-      type: "basic"
-      username: "user"
-      password: "pass"
+      basic:
+        username: "user"
+        password: "pass"
 ```
 
 Each group body contains import details for configuring the tunnel groups.
@@ -160,11 +160,37 @@ This is an array of strings which is used in routing HTTP requests to the tunnel
 **authentication**
 
 This identifies how to authenticate new tunnels attempting to register with the group.
+Multiple authentication strategies can be enabled at once.
 The following types are supported:
 
-- `basic` supports username and password authentication
-- `bearer` supports static token based matching
-- `external` supports offloading authentication and authorization to an external service
-- `insecure` disables authentication for the group (not advised for production)
+- `basic` supports username and password authentication (default scheme `Basic`)
+- `bearer` supports static token based matching (default scheme `Bearer`)
+- `external` supports offloading authentication and authorization to an external service (default scheme `Bearer`)
 
+> [!Note]: if enabling both `bearer` and `external` you will need to override one of their schemes to distinguish them.
 
+<details>
+
+<summary>Example configuration with multiple authentication strategies</summary>
+
+The following contains all three strategies (basic, bearer and external) enabled at once with different schemes:
+
+```yaml
+groups:
+  "group-name":
+    hosts:
+    - "some.host.address.dev" # Host for routing inbound HTTP requests to tunnel group
+    authentication:
+      basic:
+        username: "user"
+        password: "pass"
+      bearer:
+        token: "some-token"
+      external:
+        scheme: "JWT"
+        endpoint: "http://some-external-endpoint/auth/ext"
+```
+
+</details>
+
+If no strategies are supplied then authentication is disabled (strongly discouraged).
