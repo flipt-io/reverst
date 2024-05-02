@@ -31,15 +31,33 @@ var defaultAuthenticator Authenticator = AuthenticatorFunc(func(ctx context.Cont
 	return nil
 })
 
+type AuthenticatorOptions struct {
+	scheme string
+}
+
+type AuthorizationOption func(*AuthenticatorOptions)
+
+func WithScheme(scheme string) AuthorizationOption {
+	return func(ao *AuthenticatorOptions) {
+		ao.scheme = scheme
+	}
+}
+
 // BasicAuthenticator returns an instance of Authenticator which configures Basic authentication
 // on requests passed to Authenticate using the provided username and password
-func BasicAuthenticator(username, password string) Authenticator {
+func BasicAuthenticator(username, password string, opts ...AuthorizationOption) Authenticator {
+	options := AuthenticatorOptions{scheme: "Basic"}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	return AuthenticatorFunc(func(ctx context.Context, rlr *protocol.RegisterListenerRequest) error {
 		if rlr.Metadata == nil {
 			rlr.Metadata = map[string]string{}
 		}
 
-		rlr.Metadata[authorizationMetadataKey] = fmt.Sprintf("Basic %s",
+		rlr.Metadata[authorizationMetadataKey] = fmt.Sprintf("%s %s",
+			options.scheme,
 			base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", username, password))),
 		)
 
@@ -49,13 +67,18 @@ func BasicAuthenticator(username, password string) Authenticator {
 
 // BearerAuthenticator returns an instance of Authenticator which configures Bearer authentication
 // on requests passed to Authenticate using the provided token string
-func BearerAuthenticator(token string) Authenticator {
+func BearerAuthenticator(token string, opts ...AuthorizationOption) Authenticator {
+	options := AuthenticatorOptions{scheme: "Bearer"}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	return AuthenticatorFunc(func(ctx context.Context, rlr *protocol.RegisterListenerRequest) error {
 		if rlr.Metadata == nil {
 			rlr.Metadata = map[string]string{}
 		}
 
-		rlr.Metadata[authorizationMetadataKey] = fmt.Sprintf("Bearer %s", token)
+		rlr.Metadata[authorizationMetadataKey] = fmt.Sprintf("%s %s", options.scheme, token)
 
 		return nil
 	})
