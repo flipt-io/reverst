@@ -167,7 +167,8 @@ The following types are supported:
 - `bearer` supports static token based matching (default scheme `Bearer`)
 - `external` supports offloading authentication and authorization to an external service (default scheme `Bearer`)
 
-> [!Note]: if enabling both `bearer` and `external` you will need to override one of their schemes to distinguish them.
+> [!Note]
+> If enabling both `bearer` and `external` you will need to override one of their schemes to distinguish them.
 
 <details>
 
