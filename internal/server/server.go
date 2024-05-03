@@ -124,7 +124,11 @@ func New(conf config.Config, groupChan <-chan *config.TunnelGroups) (*Server, er
 			func() {
 				s.mu.Lock()
 				defer s.mu.Unlock()
+
+				// update authentication handle to account for new groups
 				s.handler = groups.AuthenticationHandler()
+
+				// add any new trippers and associated clients
 				for name, group := range groups.Groups {
 					tripper, ok := s.trippers[name]
 					if !ok {
@@ -145,6 +149,21 @@ func New(conf config.Config, groupChan <-chan *config.TunnelGroups) (*Server, er
 					for _, host := range group.Hosts {
 						s.clients[host] = client
 					}
+				}
+
+				// remove trippers and clients for now non-existent groups
+				for name, tripper := range s.trippers {
+					if _, ok := groups.Groups[name]; ok {
+						continue
+					}
+
+					for name, client := range s.clients {
+						if client.Transport == tripper {
+							delete(s.clients, name)
+						}
+					}
+
+					delete(s.trippers, name)
 				}
 			}()
 
