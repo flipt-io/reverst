@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"github.com/fsnotify/fsnotify"
@@ -66,7 +65,7 @@ func main() {
 
 							slog.Debug("Watcher event", "event", event)
 
-							if event.Name != conf.TunnelGroupsPath || !event.Has(fsnotify.Write) {
+							if !(event.Has(fsnotify.Remove)) {
 								continue
 							}
 
@@ -77,6 +76,11 @@ func main() {
 							}
 
 							groupsChan <- groups
+
+							// remove and re-add as the file has been moved atomically
+							watcher.Remove(event.Name)
+							watcher.Add(conf.TunnelGroupsPath)
+
 						case err, ok := <-watcher.Errors:
 							if !ok {
 								return
@@ -87,7 +91,7 @@ func main() {
 					}
 				}()
 
-				if err := watcher.Add(filepath.Dir(conf.TunnelGroupsPath)); err != nil {
+				if err := watcher.Add(conf.TunnelGroupsPath); err != nil {
 					return err
 				}
 			}
