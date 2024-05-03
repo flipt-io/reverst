@@ -64,6 +64,8 @@ func main() {
 								return
 							}
 
+							slog.Debug("Watcher event", "event", event)
+
 							if event.Name != conf.TunnelGroupsPath || !event.Has(fsnotify.Write) {
 								continue
 							}
