@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/peterbourgon/ff/v4"
 	"github.com/peterbourgon/ff/v4/ffhelp"
 	"go.flipt.io/reverst/internal/config"
@@ -37,7 +39,58 @@ func main() {
 				return err
 			}
 
-			server, err := server.New(conf)
+			groups, err := conf.TunnelGroups()
+			if err != nil {
+				return err
+			}
+
+			groupsChan := make(chan *config.TunnelGroups, 1)
+			groupsChan <- groups
+
+			if conf.WatchTunnelGroups {
+				watcher, err := fsnotify.NewWatcher()
+				if err != nil {
+					return err
+				}
+				defer watcher.Close()
+
+				go func() {
+					defer close(groupsChan)
+
+					for {
+						select {
+						case event, ok := <-watcher.Events:
+							if !ok {
+								return
+							}
+
+							if event.Name != conf.TunnelGroupsPath || !event.Has(fsnotify.Write) {
+								continue
+							}
+
+							groups, err := conf.TunnelGroups()
+							if err != nil {
+								slog.Error("reading tunnel groups: %w", err)
+								continue
+							}
+
+							groupsChan <- groups
+						case err, ok := <-watcher.Errors:
+							if !ok {
+								return
+							}
+
+							slog.Error("watching tunnel groups", "error", err)
+						}
+					}
+				}()
+
+				if err := watcher.Add(filepath.Dir(conf.TunnelGroupsPath)); err != nil {
+					return err
+				}
+			}
+
+			server, err := server.New(conf, groupsChan)
 			if err != nil {
 				return err
 			}

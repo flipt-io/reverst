@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,11 +13,20 @@ import (
 )
 
 var (
-	basic           = HandleBasic("morty", "gazorpazorp")
-	bearer          = HandleBearer("plumbus")
-	bearerHashed, _ = HandleBearerHashed("34831eccb70007e3ed06bb8ba0e2c80e661c440d09fb6513c96cd1fdeb5c57cc")
-	external        Handler
+	basic        = HandleBasic("morty", "gazorpazorp")
+	bearer       = HandleBearer("plumbus")
+	bearerHashed = HandleBearerHashed(mustHexDecodeString("34831eccb70007e3ed06bb8ba0e2c80e661c440d09fb6513c96cd1fdeb5c57cc"))
+	external     Handler
 )
+
+func mustHexDecodeString(v string) []byte {
+	b, err := hex.DecodeString(v)
+	if err != nil {
+		panic(err)
+	}
+
+	return b
+}
 
 func TestMain(m *testing.M) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,11 +43,7 @@ func TestMain(m *testing.M) {
 	}))
 	defer srv.Close()
 
-	var err error
-	external, err = HandleExternalAuthorizer(fmt.Sprintf("http://%s/ext/auth", srv.Listener.Addr().String()))
-	if err != nil {
-		panic(err)
-	}
+	external = HandleExternalAuthorizer(fmt.Sprintf("http://%s/ext/auth", srv.Listener.Addr().String()))
 
 	os.Exit(m.Run())
 }

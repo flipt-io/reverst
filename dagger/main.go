@@ -112,6 +112,7 @@ func (m *Reverst) TestIntegration(
 `,
 		}).
 		WithEnvVariable("REVERST_TUNNEL_GROUPS", "/etc/reverst/groups.yml").
+		WithEnvVariable("REVERST_WATCH_GROUPS", "true").
 		WithExposedPort(7171, dagger.ContainerWithExposedPortOpts{
 			Protocol: dagger.Udp,
 		}).

@@ -11,8 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -28,13 +28,13 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"gopkg.in/yaml.v2"
 )
 
 type Server struct {
-	conf    config.Config
-	handler protocol.AuthenticationHandler
+	conf config.Config
 
+	mu      sync.RWMutex
+	handler protocol.AuthenticationHandler
 	// trippers maps tunnel group identifiers onto roundRobbinTripper instances
 	trippers map[string]*roundRobbinTripper
 	// clients maps host names onto target clients
@@ -46,31 +46,15 @@ type Server struct {
 }
 
 // New constructs and configures a new reverst Server.
-func New(conf config.Config) (*Server, error) {
-	fi, err := os.Open(conf.TunnelGroupsPath)
-	if err != nil {
-		return nil, fmt.Errorf("initializing server: %w", err)
-	}
-
-	defer fi.Close()
-
-	var groups config.TunnelGroups
-	if err := yaml.NewDecoder(fi).Decode(&groups); err != nil {
-		return nil, fmt.Errorf("initializing server: %w", err)
-	}
-
-	if err := groups.Validate(); err != nil {
-		return nil, fmt.Errorf("validating tunnel groups: %w", err)
-	}
-
-	handler, err := groups.AuthenticationHandler()
-	if err != nil {
-		return nil, fmt.Errorf("initializing server: %w", err)
+func New(conf config.Config, groupChan <-chan *config.TunnelGroups) (*Server, error) {
+	groups, ok := <-groupChan
+	if !ok {
+		return nil, errors.New("tunnel groups channel closed")
 	}
 
 	s := &Server{
 		conf:     conf,
-		handler:  handler,
+		handler:  groups.AuthenticationHandler(),
 		trippers: map[string]*roundRobbinTripper{},
 		clients:  map[string]*http.Client{},
 	}
@@ -85,6 +69,7 @@ func New(conf config.Config) (*Server, error) {
 		meter = provider.Meter(meterName)
 	}
 
+	var err error
 	s.tunnelGroupRegistrationsTotal, err = meter.Int64Counter(
 		prometheus.BuildFQName(namespace, tunnelGroupSubsystem, "registrations_total"),
 		metric.WithDescription("Total number of registration attempts handled by tunnel group and status code"),
@@ -128,6 +113,63 @@ func New(conf config.Config) (*Server, error) {
 			s.clients[host] = client
 		}
 	}
+
+	go func() {
+		log := slog.With("tunnel_groups_path", conf.TunnelGroupsPath)
+		defer log.Info("Closing tunnel groups watcher")
+
+		for groups := range groupChan {
+			log.Debug("Tunnel groups configuration update received")
+
+			func() {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+
+				// update authentication handle to account for new groups
+				s.handler = groups.AuthenticationHandler()
+
+				// add any new trippers and associated clients
+				for name, group := range groups.Groups {
+					tripper, ok := s.trippers[name]
+					if !ok {
+						var err error
+						tripper, err = newRoundRobbinTipper(meter, name)
+						if err != nil {
+							slog.Error("Building client transport", "error", err)
+							continue
+						}
+
+						s.trippers[name] = tripper
+					}
+
+					client := &http.Client{
+						Transport: tripper,
+					}
+
+					for _, host := range group.Hosts {
+						s.clients[host] = client
+					}
+				}
+
+				// remove trippers and clients for now non-existent groups
+				for name, tripper := range s.trippers {
+					if _, ok := groups.Groups[name]; ok {
+						continue
+					}
+
+					for name, client := range s.clients {
+						if client.Transport == tripper {
+							delete(s.clients, name)
+						}
+					}
+
+					delete(s.trippers, name)
+				}
+			}()
+
+			log.Info("Tunnel groups updated")
+		}
+	}()
 
 	return s, nil
 }
@@ -271,7 +313,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Debug("Finished handling request", "error", err)
 	}()
 
+	s.mu.RLock()
 	client, ok := s.clients[host]
+	s.mu.RUnlock()
 	if !ok {
 		log.Debug("Unexpected client host requested", "host", host)
 		http.Error(w, "bad gateway", http.StatusBadGateway)
@@ -306,6 +350,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // register adds a newly accepted connection onto the identified target tunnel group.
 func (s *Server) register(conn quic.EarlyConnection) (err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	stream, err := conn.AcceptStream(conn.Context())
 	if err != nil {
 		return fmt.Errorf("accepting stream: %w", err)
