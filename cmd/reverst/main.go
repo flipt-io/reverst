@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/fsnotify/fsnotify"
@@ -63,7 +64,7 @@ func main() {
 								return
 							}
 
-							if !event.Has(fsnotify.Write) {
+							if event.Name != conf.TunnelGroupsPath || !event.Has(fsnotify.Write) {
 								continue
 							}
 
@@ -84,7 +85,7 @@ func main() {
 					}
 				}()
 
-				if err := watcher.Add(conf.TunnelGroupsPath); err != nil {
+				if err := watcher.Add(filepath.Dir(conf.TunnelGroupsPath)); err != nil {
 					return err
 				}
 			}

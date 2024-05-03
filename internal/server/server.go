@@ -115,7 +115,12 @@ func New(conf config.Config, groupChan <-chan *config.TunnelGroups) (*Server, er
 	}
 
 	go func() {
+		log := slog.With("tunnel_groups_path", conf.TunnelGroupsPath)
+		defer log.Info("Closing tunnel groups watcher")
+
 		for groups := range groupChan {
+			log.Debug("Tunnel groups configuration update recieved")
+
 			func() {
 				s.mu.Lock()
 				defer s.mu.Unlock()
@@ -142,6 +147,8 @@ func New(conf config.Config, groupChan <-chan *config.TunnelGroups) (*Server, er
 					}
 				}
 			}()
+
+			log.Info("Tunnel groups updated")
 		}
 	}()
 
