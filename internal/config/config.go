@@ -58,7 +58,7 @@ func (c Config) TunnelGroups() (*TunnelGroups, error) {
 
 	var groups TunnelGroups
 	if err := yaml.NewDecoder(fi).Decode(&groups); err != nil {
-		return nil, fmt.Errorf("decoding tunngel groups: %w", err)
+		return nil, fmt.Errorf("decoding tunnel groups: %w", err)
 	}
 
 	if err := groups.Validate(); err != nil {
