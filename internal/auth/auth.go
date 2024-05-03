@@ -4,13 +4,11 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"go.flipt.io/reverst/pkg/protocol"
@@ -116,12 +114,7 @@ func HandleBearer(token string) Handler {
 
 // HandleBearerHashed performs a bearer token comparison for register listener request metadata
 // It expects the token to have been pre-hashed using sha256 and encoded as a hexidecimal string
-func HandleBearerHashed(hashedToken string) (Handler, error) {
-	expected, err := hex.DecodeString(hashedToken)
-	if err != nil {
-		return nil, err
-	}
-
+func HandleBearerHashed(expected []byte) Handler {
 	return AuthenticationHandlerFunc(func(scheme, token string) error {
 		if !strings.EqualFold(scheme, "Bearer") {
 			return fmt.Errorf("bearer: unexpected scheme %q", scheme)
@@ -133,14 +126,10 @@ func HandleBearerHashed(hashedToken string) (Handler, error) {
 		}
 
 		return nil
-	}), nil
+	})
 }
 
-func HandleExternalAuthorizer(addr string) (Handler, error) {
-	if _, err := url.Parse(addr); err != nil {
-		return nil, fmt.Errorf("building external authorizer: %w", err)
-	}
-
+func HandleExternalAuthorizer(addr string) Handler {
 	client := &http.Client{}
 
 	return AuthenticationHandlerFunc(func(scheme, payload string) error {
@@ -164,7 +153,7 @@ func HandleExternalAuthorizer(addr string) (Handler, error) {
 		body, _ := io.ReadAll(resp.Body)
 
 		return fmt.Errorf("external: unexpected response (status %d) %q", resp.StatusCode, string(body))
-	}), nil
+	})
 }
 
 func safeComparator(expected string) func(string) bool {

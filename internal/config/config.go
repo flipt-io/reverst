@@ -1,24 +1,29 @@
 package config
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
+	"reflect"
 	"time"
 
 	"go.flipt.io/reverst/internal/auth"
 	"go.flipt.io/reverst/pkg/protocol"
+	"gopkg.in/yaml.v2"
 )
 
 type Config struct {
-	Level            Level  `ff:" short=l | long=log              | default=info             | usage: 'debug, info, warn or error'                           "`
-	TunnelAddress    string `ff:" short=a | long=tunnel-address   | default='127.0.0.1:7171' | usage: address for accepting tunnelling quic connections      "`
-	HTTPAddress      string `ff:" short=s | long=http-address     | default='0.0.0.0:8181'   | usage: address for serving HTTP requests                      "`
-	TunnelGroupsPath string `ff:" short=g | long=tunnel-groups    | default='groups.yml'     | usage: path to tunnel groups configuration file               "`
-	ServerName       string `ff:" short=n | long=server-name      |                            usage: server name used to identify tunnel via TLS (required) "`
-	PrivateKeyPath   string `ff:" short=k | long=private-key-path |                            usage: path to TLS private key PEM file (required)            "`
-	CertificatePath  string `ff:" short=c | long=certificate-path |                            usage: path to TLS certificate PEM file (required)            "`
+	Level             Level  `ff:" short=l | long=log              | default=info             | usage: 'debug, info, warn or error'                           "`
+	TunnelAddress     string `ff:" short=a | long=tunnel-address   | default='127.0.0.1:7171' | usage: address for accepting tunnelling quic connections      "`
+	HTTPAddress       string `ff:" short=s | long=http-address     | default='0.0.0.0:8181'   | usage: address for serving HTTP requests                      "`
+	TunnelGroupsPath  string `ff:" short=g | long=tunnel-groups    | default='groups.yml'     | usage: path to tunnel groups configuration file               "`
+	WatchTunnelGroups bool   `ff:" short=w | long=watch-groups     | default=false            | usage: watch tunnel groups file for updates "`
+	ServerName        string `ff:" short=n | long=server-name      |                            usage: server name used to identify tunnel via TLS (required) "`
+	PrivateKeyPath    string `ff:" short=k | long=private-key-path |                            usage: path to TLS private key PEM file (required)            "`
+	CertificatePath   string `ff:" short=c | long=certificate-path |                            usage: path to TLS certificate PEM file (required)            "`
 
 	// ManagementAddress is where reverst hosts introspective APIs for telemetry and debugging etc.
 	ManagementAddress string `ff:" long=management-address | usage: HTTP address for managment API "`
@@ -43,6 +48,26 @@ func (c Config) Validate() error {
 	return nil
 }
 
+func (c Config) TunnelGroups() (*TunnelGroups, error) {
+	fi, err := os.Open(c.TunnelGroupsPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading tunnel groups: %w", err)
+	}
+
+	defer fi.Close()
+
+	var groups TunnelGroups
+	if err := yaml.NewDecoder(fi).Decode(&groups); err != nil {
+		return nil, fmt.Errorf("decoding tunngel groups: %w", err)
+	}
+
+	if err := groups.Validate(); err != nil {
+		return nil, fmt.Errorf("validating tunnel groups: %w", err)
+	}
+
+	return &groups, nil
+}
+
 // TunnelGroups is a configuration file format for defining the tunnel
 // groups served by an instance of then reverst tunnel server.
 type TunnelGroups struct {
@@ -59,7 +84,7 @@ func (g TunnelGroups) Validate() error {
 	return nil
 }
 
-func (g TunnelGroups) AuthenticationHandler() (protocol.AuthenticationHandler, error) {
+func (g TunnelGroups) AuthenticationHandler() protocol.AuthenticationHandler {
 	handlers := map[string]protocol.AuthenticationHandler{}
 	for name, group := range g.Groups {
 		handler := auth.Authenticator{}
@@ -68,10 +93,6 @@ func (g TunnelGroups) AuthenticationHandler() (protocol.AuthenticationHandler, e
 			scheme := basic.Scheme
 			if scheme == "" {
 				scheme = "Basic"
-			}
-
-			if _, ok := handler[scheme]; ok {
-				return nil, fmt.Errorf("only one authentication strategy per scheme allowed: %q", scheme)
 			}
 
 			handler[scheme] = auth.HandleBasic(basic.Username, basic.Password)
@@ -83,39 +104,10 @@ func (g TunnelGroups) AuthenticationHandler() (protocol.AuthenticationHandler, e
 				scheme = "Bearer"
 			}
 
-			if _, ok := handler[scheme]; ok {
-				return nil, fmt.Errorf("only one authentication strategy per scheme allowed: %q", scheme)
-			}
-
-			if bearer.Token != "" || bearer.TokenPath != "" {
-				token := bearer.Token
-				if token == "" {
-					tokenBytes, err := os.ReadFile(bearer.TokenPath)
-					if err != nil {
-						return nil, err
-					}
-
-					token = string(tokenBytes)
-				}
-
-				handler[scheme] = auth.HandleBearer(token)
+			if bearer.Token != "" {
+				handler[scheme] = auth.HandleBearer(bearer.Token)
 			} else {
-				token := bearer.HashedToken
-				if token == "" {
-					tokenBytes, err := os.ReadFile(bearer.HashedTokenPath)
-					if err != nil {
-						return nil, err
-					}
-
-					token = string(tokenBytes)
-				}
-
-				h, err := auth.HandleBearerHashed(token)
-				if err != nil {
-					return nil, err
-				}
-
-				handler[scheme] = h
+				handler[scheme] = auth.HandleBearerHashed(bearer.hashedTokenBytes)
 			}
 		}
 
@@ -125,16 +117,7 @@ func (g TunnelGroups) AuthenticationHandler() (protocol.AuthenticationHandler, e
 				scheme = "Bearer"
 			}
 
-			if _, ok := handler[scheme]; ok {
-				return nil, fmt.Errorf("only one authentication strategy per scheme allowed: %q", scheme)
-			}
-
-			h, err := auth.HandleExternalAuthorizer(external.Endpoint)
-			if err != nil {
-				return nil, err
-			}
-
-			handler[scheme] = h
+			handler[scheme] = auth.HandleExternalAuthorizer(external.Endpoint)
 		}
 
 		handlers[name] = handler
@@ -147,7 +130,7 @@ func (g TunnelGroups) AuthenticationHandler() (protocol.AuthenticationHandler, e
 		}
 
 		return handler.Authenticate(rlr)
-	}), nil
+	})
 }
 
 // TunnelGroup is an instance of a tunnel group which identifies
@@ -167,9 +150,15 @@ type AuthenticationBasic struct {
 	Password string `json:"password,omitempty" yaml:"password,omitempty"`
 }
 
+func (a *AuthenticationBasic) scheme() string { return a.Scheme }
+
 func (a *AuthenticationBasic) Validate() error {
 	if a == nil {
 		return nil
+	}
+
+	if a.Scheme == "" {
+		a.Scheme = "Basic"
 	}
 
 	if a.Username == "" {
@@ -184,16 +173,23 @@ func (a *AuthenticationBasic) Validate() error {
 }
 
 type AuthenticationBearer struct {
-	Scheme          string `json:"scheme,omitempty" yaml:"scheme,omitempty"`
-	Token           string `json:"token,omitempty" yaml:"token,omitempty"`
-	TokenPath       string `json:"tokenPath,omitempty" yaml:"tokenPath,omitempty"`
-	HashedToken     string `json:"hashedToken,omitempty" yaml:"hashedToken,omitempty"`
-	HashedTokenPath string `json:"hashedTokenPath,omitempty" yaml:"hashedTokenPath,omitempty"`
+	Scheme           string `json:"scheme,omitempty" yaml:"scheme,omitempty"`
+	Token            string `json:"token,omitempty" yaml:"token,omitempty"`
+	TokenPath        string `json:"tokenPath,omitempty" yaml:"tokenPath,omitempty"`
+	HashedToken      string `json:"hashedToken,omitempty" yaml:"hashedToken,omitempty"`
+	HashedTokenPath  string `json:"hashedTokenPath,omitempty" yaml:"hashedTokenPath,omitempty"`
+	hashedTokenBytes []byte `json:"-" yaml:"-"`
 }
+
+func (a *AuthenticationBearer) scheme() string { return a.Scheme }
 
 func (a *AuthenticationBearer) Validate() error {
 	if a == nil {
 		return nil
+	}
+
+	if a.Scheme == "" {
+		a.Scheme = "Bearer"
 	}
 
 	if a.Token == "" &&
@@ -201,6 +197,34 @@ func (a *AuthenticationBearer) Validate() error {
 		a.HashedToken == "" &&
 		a.HashedTokenPath == "" {
 		return errors.New("bearer: one of token, tokenPath, hashedToken or hashedTokenPath must be non-empty string")
+	}
+
+	// token path takes precedent and replaces token contents
+	if a.TokenPath != "" {
+		tokenBytes, err := os.ReadFile(a.TokenPath)
+		if err != nil {
+			return fmt.Errorf("bearer: validating token path %w", err)
+		}
+
+		a.Token = string(tokenBytes)
+	}
+
+	// hashed token path takes precedent and replaces hashed token contents
+	if a.HashedTokenPath != "" {
+		tokenBytes, err := os.ReadFile(a.HashedTokenPath)
+		if err != nil {
+			return fmt.Errorf("bearer: validating hashed token path %w", err)
+		}
+
+		a.HashedToken = string(tokenBytes)
+	}
+
+	if a.HashedToken != "" {
+		var err error
+		a.hashedTokenBytes, err = hex.DecodeString(a.HashedToken)
+		if err != nil {
+			return fmt.Errorf("bearer: decoding hashed token: %w", err)
+		}
 	}
 
 	return nil
@@ -211,13 +235,23 @@ type AuthenticationExternal struct {
 	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
 }
 
+func (a *AuthenticationExternal) scheme() string { return a.Scheme }
+
 func (a *AuthenticationExternal) Validate() error {
 	if a == nil {
 		return nil
 	}
 
+	if a.Scheme == "" {
+		a.Scheme = "Bearer"
+	}
+
 	if a.Endpoint == "" {
-		return errors.New("external: endpoint myst be non-empty string")
+		return errors.New("external: endpoint must be non-empty string")
+	}
+
+	if _, err := url.Parse(a.Endpoint); err != nil {
+		return fmt.Errorf("external: parsing endpoint as URL: %w", err)
 	}
 
 	return nil
@@ -225,23 +259,39 @@ func (a *AuthenticationExternal) Validate() error {
 
 func (g TunnelGroup) Validate() error {
 	auth := g.Authentication
-	if err := auth.Basic.Validate(); err != nil {
-		return err
-	}
-
-	if err := auth.Bearer.Validate(); err != nil {
-		return err
-	}
-
-	if err := auth.External.Validate(); err != nil {
-		return err
-	}
-
 	if auth.Basic == nil && auth.Bearer == nil && auth.External == nil {
 		slog.Warn("No authentication has been configured for tunnel (insecure)")
 	}
 
+	schemes := map[string]struct{}{}
+	for _, s := range []validator{auth.Basic, auth.Bearer, auth.External} {
+		// it is not enough to do a simple == nil check here because of how Go
+		// represents variables of interface types as a tuple of concrete type
+		// and its value under the hood.
+		// we have to use the reflect package to assert that the value is nil
+		// and to ignore the fact that each validator implementation has a different
+		// yet present concrete type.
+		if reflect.ValueOf(s).IsNil() {
+			continue
+		}
+
+		if err := s.Validate(); err != nil {
+			return err
+		}
+
+		if _, ok := schemes[s.scheme()]; ok {
+			return fmt.Errorf("only one authentication strategy per scheme allowed: %q has duplicates", s.scheme())
+		}
+
+		schemes[s.scheme()] = struct{}{}
+	}
+
 	return nil
+}
+
+type validator interface {
+	scheme() string
+	Validate() error
 }
 
 type Level slog.Level
