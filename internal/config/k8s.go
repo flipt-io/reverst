@@ -36,6 +36,7 @@ func watchK8sConfigMap(ctx context.Context, ch chan<- *TunnelGroups, namespace, 
 	}
 
 	go func() {
+		defer close(ch)
 		defer close(cfgs)
 
 		for {

@@ -51,8 +51,6 @@ func (c Config) Validate() error {
 }
 
 func (c *Config) SubscribeTunnelGroups(ctx context.Context, ch chan<- *TunnelGroups) error {
-	defer close(ch)
-
 	u, err := url.Parse(c.TunnelGroups)
 	if err != nil {
 		return err
