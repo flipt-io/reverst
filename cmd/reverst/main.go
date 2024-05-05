@@ -9,8 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/peterbourgon/ff/v4"
 	"github.com/peterbourgon/ff/v4/ffhelp"
 	"go.flipt.io/reverst/internal/config"
@@ -38,62 +38,18 @@ func main() {
 				return err
 			}
 
-			groups, err := conf.TunnelGroups()
-			if err != nil {
-				return err
-			}
-
+			// start a subscription for tunnel group configuration
+			// this function should push at-least one tunnel groups
+			// instance on the channel before returning a non-nil error
 			groupsChan := make(chan *config.TunnelGroups, 1)
-			groupsChan <- groups
-
-			if conf.WatchTunnelGroups {
-				watcher, err := fsnotify.NewWatcher()
-				if err != nil {
-					return err
-				}
-				defer watcher.Close()
-
-				go func() {
-					defer close(groupsChan)
-
-					for {
-						select {
-						case event, ok := <-watcher.Events:
-							if !ok {
-								return
-							}
-
-							slog.Debug("Watcher event", "event", event)
-
-							if !(event.Has(fsnotify.Remove)) {
-								continue
-							}
-
-							groups, err := conf.TunnelGroups()
-							if err != nil {
-								slog.Error("reading tunnel groups: %w", err)
-								continue
-							}
-
-							groupsChan <- groups
-
-							// remove and re-add as the file has been moved atomically
-							watcher.Remove(event.Name)
-							watcher.Add(conf.TunnelGroupsPath)
-
-						case err, ok := <-watcher.Errors:
-							if !ok {
-								return
-							}
-
-							slog.Error("watching tunnel groups", "error", err)
-						}
-					}
-				}()
-
-				if err := watcher.Add(conf.TunnelGroupsPath); err != nil {
-					return err
-				}
+			if err := func() error {
+				// this anonymous function allows us to defer a close
+				// and safely shadow the parent context
+				ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				return conf.SubscribeTunnelGroups(ctx, groupsChan)
+			}(); err != nil {
+				return err
 			}
 
 			server, err := server.New(conf, groupsChan)
