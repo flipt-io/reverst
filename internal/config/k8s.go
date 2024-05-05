@@ -10,7 +10,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-func watchK8sConfigMap(ctx context.Context, ch chan<- *TunnelGroups, namespace, name, key string) error {
+func watchK8sConfigMap(ctx context.Context, ch chan<- *TunnelGroups, namespace, name, key string, watch bool) error {
 	cfgs := make(chan v1.ConfigMap)
 
 	if err := k8s.WatchConfigMap(ctx, cfgs, namespace, name); err != nil {
@@ -27,6 +27,12 @@ func watchK8sConfigMap(ctx context.Context, ch chan<- *TunnelGroups, namespace, 
 		}
 
 		ch <- groups
+	}
+
+	if !watch {
+		close(cfgs)
+		close(ch)
+		return nil
 	}
 
 	go func() {

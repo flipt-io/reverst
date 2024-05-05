@@ -60,7 +60,7 @@ func (c *Config) SubscribeTunnelGroups(ctx context.Context, ch chan<- *TunnelGro
 
 	switch u.Scheme {
 	case "", "file":
-		return watchFSNotify(ctx, ch, filepath.Join(u.Host, u.Path))
+		return watchFSNotify(ctx, ch, filepath.Join(u.Host, u.Path), c.WatchTunnelGroups)
 	case "k8s":
 		if u.Host == "configmap" {
 			parts := strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 3)
@@ -68,7 +68,7 @@ func (c *Config) SubscribeTunnelGroups(ctx context.Context, ch chan<- *TunnelGro
 				return fmt.Errorf("unexpected k8s configmap path: %q (should be [namespace]/[name]/[key])", u.Path)
 			}
 
-			return watchK8sConfigMap(ctx, ch, parts[0], parts[1], parts[2])
+			return watchK8sConfigMap(ctx, ch, parts[0], parts[1], parts[2], c.WatchTunnelGroups)
 		}
 
 		return fmt.Errorf("unsupported k8s resource: %q (expected [configmap])", u.Host)

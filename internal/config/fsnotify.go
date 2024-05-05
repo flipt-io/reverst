@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-func watchFSNotify(ctx context.Context, ch chan<- *TunnelGroups, path string) error {
+func watchFSNotify(ctx context.Context, ch chan<- *TunnelGroups, path string, watch bool) error {
 	groups, err := buildTunnelGroupsAtPath(path)
 	if err != nil {
 		return err
@@ -18,6 +18,10 @@ func watchFSNotify(ctx context.Context, ch chan<- *TunnelGroups, path string) er
 
 	// feed initial channel group
 	ch <- groups
+
+	if !watch {
+		return nil
+	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
