@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/peterbourgon/ff/v4"
 	"github.com/peterbourgon/ff/v4/ffhelp"
@@ -42,13 +41,7 @@ func main() {
 			// this function should push at-least one tunnel groups
 			// instance on the channel before returning a non-nil error
 			groupsChan := make(chan *config.TunnelGroups, 1)
-			if err := func() error {
-				// this anonymous function allows us to defer a close
-				// and safely shadow the parent context
-				ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				defer cancel()
-				return conf.SubscribeTunnelGroups(ctx, groupsChan)
-			}(); err != nil {
+			if err := conf.SubscribeTunnelGroups(ctx, groupsChan); err != nil {
 				return err
 			}
 

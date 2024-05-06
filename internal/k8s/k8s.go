@@ -18,37 +18,70 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// WatchConfigMap pushes instances of the identified configuration map found in a
-// target Kuberentes cluster.
-func WatchConfigMap(ctx context.Context, dst chan<- v1.ConfigMap, namespace, name string) error {
+type ConfigMapWatcher struct {
+	log           *slog.Logger
+	namespace     string
+	name          string
+	dynamicClient *dynamic.DynamicClient
+}
+
+func New(namespace, name string) (*ConfigMapWatcher, error) {
 	k8sConfig, err := k8sConfig()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	client, err := dynamic.NewForConfig(k8sConfig)
+	config := dynamic.ConfigFor(k8sConfig)
+	httpClient, err := rest.HTTPClientFor(config)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	log := slog.With("namespace", namespace, "name", name)
-	log.Debug("Creating shared informer factory")
+	watcher := &ConfigMapWatcher{
+		log:       slog.With("namespace", namespace, "name", name),
+		namespace: namespace,
+		name:      name,
+	}
 
-	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, namespace, func(lo *metav1.ListOptions) {
-		lo.FieldSelector = fields.OneTermEqualSelector("metadata.name", name).String()
+	watcher.dynamicClient, err = dynamic.NewForConfigAndClient(config, httpClient)
+	if err != nil {
+		return nil, err
+	}
+
+	return watcher, nil
+}
+
+func (w *ConfigMapWatcher) Get(ctx context.Context) (v1.ConfigMap, error) {
+	obj, err := w.dynamicClient.
+		Resource(v1.SchemeGroupVersion.WithResource("configmaps")).
+		Namespace(w.namespace).
+		Get(ctx, w.name, metav1.GetOptions{})
+	if err != nil {
+		return v1.ConfigMap{}, err
+	}
+
+	return TypedEventHandler[v1.ConfigMap]{}.parse(obj)
+}
+
+// StartWatching pushes instances of the identified configuration map found in a
+// target Kuberentes cluster.
+func (w *ConfigMapWatcher) StartWatching(ctx context.Context, dst chan<- v1.ConfigMap) error {
+	w.log.Debug("Creating shared informer factory")
+
+	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(w.dynamicClient, 0, w.namespace, func(lo *metav1.ListOptions) {
+		lo.FieldSelector = fields.OneTermEqualSelector("metadata.name", w.name).String()
 	})
 
 	if err := inform(ctx, factory, v1.SchemeGroupVersion.WithResource("configmaps"), TypedEventHandler[v1.ConfigMap]{
 		AddFunc: func(cfg v1.ConfigMap) {
-			log.Debug("ConfigMap added")
-			dst <- cfg
+			w.log.Debug("ConfigMap added")
 		},
 		UpdateFunc: func(_, cfg v1.ConfigMap) {
-			log.Debug("ConfigMap updated")
+			w.log.Debug("ConfigMap updated")
 			dst <- cfg
 		},
 		DeleteFunc: func(cfg v1.ConfigMap) {
-			log.Debug("ConfigMap deleted")
+			w.log.Debug("ConfigMap deleted")
 		},
 	}); err != nil {
 		return err

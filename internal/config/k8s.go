@@ -11,29 +11,33 @@ import (
 )
 
 func watchK8sConfigMap(ctx context.Context, ch chan<- *TunnelGroups, namespace, name, key string, watch bool) error {
-	cfgs := make(chan v1.ConfigMap)
-
-	if err := k8s.WatchConfigMap(ctx, cfgs, namespace, name); err != nil {
+	watcher, err := k8s.New(namespace, name)
+	if err != nil {
 		return err
 	}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case cfg := <-cfgs:
-		groups, err := buildTunnelGroupsFromConfigMap(cfg, key)
-		if err != nil {
-			return err
-		}
-
-		ch <- groups
+	// get initial configmap before we return to ensure
+	// we fail fast if we can't get at-least one
+	cfg, err := watcher.Get(ctx)
+	if err != nil {
+		return err
 	}
+
+	groups, err := buildTunnelGroupsFromConfigMap(cfg, key)
+	if err != nil {
+		return err
+	}
+
+	ch <- groups
 
 	if !watch {
-		close(cfgs)
-		close(ch)
 		return nil
 	}
+
+	slog.Info("Starting ConfigMap watcher", "namespace", namespace, "name", name)
+
+	cfgs := make(chan v1.ConfigMap)
+	watcher.StartWatching(ctx, cfgs)
 
 	go func() {
 		defer close(ch)

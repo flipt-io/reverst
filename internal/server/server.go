@@ -290,9 +290,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log := slog.With("method", r.Method, "path", r.URL.Path)
 	log.Debug("Handling request")
 
-	var err error
-	host, _, err := net.SplitHostPort(r.Host)
-	if err != nil {
+	host, _, perr := net.SplitHostPort(r.Host)
+	if perr != nil {
 		host = r.Host
 	}
 
@@ -303,6 +302,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	wr := interceptStatus(w)
 	w = wr
 
+	var err error
 	defer func() {
 		attrs := attribute.NewSet(
 			hostKey.String(host),
