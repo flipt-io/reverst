@@ -1,32 +1,34 @@
 package config
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	"go.flipt.io/reverst/internal/auth"
 	"go.flipt.io/reverst/pkg/protocol"
-	"gopkg.in/yaml.v2"
 )
 
 type Config struct {
 	Level             Level  `ff:" short=l | long=log              | default=info             | usage: 'debug, info, warn or error'                           "`
 	TunnelAddress     string `ff:" short=a | long=tunnel-address   | default='127.0.0.1:7171' | usage: address for accepting tunnelling quic connections      "`
 	HTTPAddress       string `ff:" short=s | long=http-address     | default='0.0.0.0:8181'   | usage: address for serving HTTP requests                      "`
-	TunnelGroupsPath  string `ff:" short=g | long=tunnel-groups    | default='groups.yml'     | usage: path to tunnel groups configuration file               "`
-	WatchTunnelGroups bool   `ff:" short=w | long=watch-groups     | default=false            | usage: watch tunnel groups file for updates "`
 	ServerName        string `ff:" short=n | long=server-name      |                            usage: server name used to identify tunnel via TLS (required) "`
 	PrivateKeyPath    string `ff:" short=k | long=private-key-path |                            usage: path to TLS private key PEM file (required)            "`
 	CertificatePath   string `ff:" short=c | long=certificate-path |                            usage: path to TLS certificate PEM file (required)            "`
+	TunnelGroups      string `ff:" short=g | long=tunnel-groups    | default='groups.yml'     | usage: path to file or k8s configmap identifier               "`
+	WatchTunnelGroups bool   `ff:" short=w | long=watch-groups     | default=false            | usage: watch tunnel groups sources for updates "`
 
 	// ManagementAddress is where reverst hosts introspective APIs for telemetry and debugging etc.
-	ManagementAddress string `ff:" long=management-address | usage: HTTP address for managment API "`
+	ManagementAddress string `ff:" long=management-address | usage: HTTP address for management API "`
 
 	MaxIdleTimeout  time.Duration `ff:" long=max-idle-timeout  | default=1m  | usage: maximum time a connection can be idle "`
 	KeepAlivePeriod time.Duration `ff:" long=keep-alive-period | default=30s | usage: period between keep-alive events      "`
@@ -48,24 +50,29 @@ func (c Config) Validate() error {
 	return nil
 }
 
-func (c Config) TunnelGroups() (*TunnelGroups, error) {
-	fi, err := os.Open(c.TunnelGroupsPath)
+func (c *Config) SubscribeTunnelGroups(ctx context.Context, ch chan<- *TunnelGroups) error {
+	u, err := url.Parse(c.TunnelGroups)
 	if err != nil {
-		return nil, fmt.Errorf("reading tunnel groups: %w", err)
+		return err
 	}
 
-	defer fi.Close()
+	switch u.Scheme {
+	case "", "file":
+		return watchFSNotify(ctx, ch, filepath.Join(u.Host, u.Path), c.WatchTunnelGroups)
+	case "k8s":
+		if u.Host == "configmap" {
+			parts := strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 3)
+			if len(parts) < 3 {
+				return fmt.Errorf("unexpected k8s configmap path: %q (should be [namespace]/[name]/[key])", u.Path)
+			}
 
-	var groups TunnelGroups
-	if err := yaml.NewDecoder(fi).Decode(&groups); err != nil {
-		return nil, fmt.Errorf("decoding tunnel groups: %w", err)
+			return watchK8sConfigMap(ctx, ch, parts[0], parts[1], parts[2], c.WatchTunnelGroups)
+		}
+
+		return fmt.Errorf("unsupported k8s resource: %q (expected [configmap])", u.Host)
 	}
 
-	if err := groups.Validate(); err != nil {
-		return nil, fmt.Errorf("validating tunnel groups: %w", err)
-	}
-
-	return &groups, nil
+	return fmt.Errorf("unexpected tunnel group scheme: %q", c.TunnelGroups)
 }
 
 // TunnelGroups is a configuration file format for defining the tunnel

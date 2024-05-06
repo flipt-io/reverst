@@ -41,7 +41,7 @@ func (m *Reverst) BuildContainer(
 ) (*Container, error) {
 	build := dag.
 		Go().
-		FromVersion("1.21-alpine3.18").
+		FromVersion("1.22-alpine3.18").
 		Build(source, dagger.GoBuildOpts{
 			Packages: []string{"./cmd/reverst/..."},
 		})
@@ -58,7 +58,7 @@ func (m *Reverst) TestUnit(
 	source *dagger.Directory,
 ) (string, error) {
 	out, err := dag.Container().
-		From("golang:1.21-alpine3.18").
+		From("golang:1.22-alpine3.18").
 		WithExec([]string{"apk", "add", "gcc", "build-base"}).
 		With(dag.Go().GlobalCache).
 		WithEnvVariable("CGO_ENABLED", "1").
@@ -128,7 +128,7 @@ func (m *Reverst) TestIntegration(
 	}
 
 	out, err := dag.Container().
-		From("golang:1.21-alpine3.18").
+		From("golang:1.22-alpine3.18").
 		WithServiceBinding("local.example", reverst).
 		With(dag.Go().GlobalCache).
 		WithMountedDirectory("/src", source).

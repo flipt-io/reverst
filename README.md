@@ -120,11 +120,13 @@ USAGE
 FLAGS
   -l, --log LEVEL                    debug, info, warn or error (default: INFO)
   -a, --tunnel-address STRING        address for accepting tunnelling quic connections (default: 127.0.0.1:7171)
-  -s, --http-address STRING          address for serving HTTP requests (default: 127.0.0.1:8181)
-  -g, --tunnel-groups STRING         path to tunnel groups configuration file (default: groups.yml)
+  -s, --http-address STRING          address for serving HTTP requests (default: 0.0.0.0:8181)
   -n, --server-name STRING           server name used to identify tunnel via TLS (required)
   -k, --private-key-path STRING      path to TLS private key PEM file (required)
   -c, --certificate-path STRING      path to TLS certificate PEM file (required)
+  -g, --tunnel-groups STRING         path to file or k8s configmap identifier (default: groups.yml)
+  -w, --watch-groups                 watch tunnel groups sources for updates
+      --management-address STRING    HTTP address for management API
       --max-idle-timeout DURATION    maximum time a connection can be idle (default: 1m0s)
       --keep-alive-period DURATION   period between keep-alive events (default: 30s)
 ```
@@ -135,6 +137,31 @@ To do so, prefix them with `REVERST_`, replace each `-` with `_` and uppercase t
 For example, `--tunnel-address` becomes `REVERST_TUNNEL_ADDRESS`.
 
 #### Tunnel Groups Configuration YAML
+
+**configuring**
+
+Currently, the tunnel groups configuration can be sourced from two different locations types (`file` and `k8s`).
+Both tunnel group sources support watching sources for changes over time (see `-w` flag).
+
+- Local filesystem (`file://[path]`)
+
+The standard and simplest method is to point reverst at your configuration YAML file on your machine via its path.
+
+```console
+reverst -g path/to/configuration.yml
+// alternatively:
+reverst -g file:///path/to/configuration.yml
+```
+
+- Kubernetes ConfigMap `k8s://configmap/[namespace]/[name]/[key]`
+
+Alternatively, you can configure reverst to connect to a Kubernetes API server and fetch / watch configuration from.
+
+```console
+reverst -g k8s://configmap/default/tunnelconfig/groups.yml
+```
+
+**defining**
 
 The reverst server take a path to a YAML encoded file, which identifies the tunnel groups to be hosted.
 A tunnel group is a load-balancer on which tunneled servers can register themselves.
