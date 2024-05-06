@@ -10,13 +10,14 @@ func _() {
 	var x [1]struct{}
 	_ = x[CodeOK-0]
 	_ = x[CodeBadRequest-1]
-	_ = x[CodeUnauthorized-2]
-	_ = x[CodeServerError-3]
+	_ = x[CodeNotFound-2]
+	_ = x[CodeUnauthorized-3]
+	_ = x[CodeServerError-4]
 }
 
-const _ResponseCode_name = "CodeOKCodeBadRequestCodeUnauthorizedCodeServerError"
+const _ResponseCode_name = "CodeOKCodeBadRequestCodeNotFoundCodeUnauthorizedCodeServerError"
 
-var _ResponseCode_index = [...]uint8{0, 6, 20, 36, 51}
+var _ResponseCode_index = [...]uint8{0, 6, 20, 32, 48, 63}
 
 func (i ResponseCode) String() string {
 	if i >= ResponseCode(len(_ResponseCode_index)-1) {

@@ -18,6 +18,7 @@ type ResponseCode uint8
 const (
 	CodeOK ResponseCode = iota
 	CodeBadRequest
+	CodeNotFound
 	CodeUnauthorized
 	CodeServerError
 )
