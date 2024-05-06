@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"go.flipt.io/reverst/pkg/protocol"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 var (
@@ -26,6 +28,15 @@ var (
 	DefaultQuicConfig = &quic.Config{
 		MaxIdleTimeout:  20 * time.Second,
 		KeepAlivePeriod: 10 * time.Second,
+	}
+
+	// DefaultBackoff is the default backoff used when dialing and serving
+	// a connection.
+	DefaultBackoff = wait.Backoff{
+		Steps:    5,
+		Duration: 100 * time.Millisecond,
+		Factor:   2.0,
+		Jitter:   0.1,
 	}
 )
 
@@ -92,7 +103,12 @@ func (s *Server) getTLSConfig(addr string) (*tls.Config, error) {
 // DialAndServe dials out to the provided address and attempts to register the server
 // as a listener on the remote tunnel group.
 func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
-	log := coallesce(s.Logger, slog.Default()).With("addr", addr)
+	attrs := []slog.Attr{slog.String("addr", addr)}
+	if host, port, err := net.SplitHostPort(addr); err == nil {
+		attrs = []slog.Attr{slog.String("host", host), slog.String("port", port)}
+	}
+
+	log := slog.New(coallesce(s.Logger, slog.Default()).Handler().WithAttrs(attrs))
 	log.Debug("Dialing address")
 
 	tlsConf, err := s.getTLSConfig(addr)
@@ -100,10 +116,46 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 		return err
 	}
 
-	newCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	quicConf := coallesce(s.QuicConfig, DefaultQuicConfig)
 
-	conn, err := quic.DialAddr(newCtx,
+	var lastErr error
+	err = wait.ExponentialBackoffWithContext(ctx, DefaultBackoff, func(context.Context) (done bool, err error) {
+		err = s.dialAndServe(ctx, log, addr, tlsConf, quicConf)
+		if err != nil {
+			lastErr = err
+			if errors.Is(err, context.Canceled) {
+				return false, nil
+			}
+
+			// we log out the error under debug as this function will be repeated
+			// and hopefully will eventually succeed
+			// if not then the last observed error should be returned and logged
+			// at a higher log level
+			log.Debug("Error while attempting to dial and register", "error", err)
+
+			return false, nil
+		}
+
+		return true, nil
+	})
+
+	// this signifies that the exponential backoff was exhausted or exceeded a deadline
+	// in this situation we simply return the last observed error in the dial and serve attempts
+	if wait.Interrupted(err) {
+		err = lastErr
+	}
+
+	return err
+}
+
+func (s *Server) dialAndServe(
+	ctx context.Context,
+	log *slog.Logger,
+	addr string,
+	tlsConf *tls.Config,
+	quicConf *quic.Config,
+) error {
+	conn, err := quic.DialAddr(ctx,
 		addr,
 		tlsConf,
 		coallesce(s.QuicConfig, DefaultQuicConfig),
@@ -113,7 +165,7 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 	}
 
 	go func() {
-		<-newCtx.Done()
+		<-ctx.Done()
 
 		_ = conn.CloseWithError(protocol.ApplicationOK, "")
 	}()
@@ -127,28 +179,7 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 
 	log.Info("Starting server")
 
-	// begin serving HTTP requests
-	if err := (&http3.Server{Handler: s.Handler}).ServeQUICConn(conn); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil
-		}
-
-		var aerr *quic.ApplicationError
-		if errors.As(err, &aerr) {
-			switch aerr.ErrorCode {
-			case protocol.ApplicationOK:
-				return nil
-			case protocol.ApplicationError:
-				log.Debug("Attempting to reconnect")
-
-				return s.DialAndServe(ctx, addr)
-			}
-		}
-
-		return err
-	}
-
-	return nil
+	return (&http3.Server{Handler: s.Handler}).ServeQUICConn(conn)
 }
 
 func (s *Server) register(conn quic.Connection) error {

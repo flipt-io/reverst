@@ -386,6 +386,13 @@ func (s *Server) register(conn quic.EarlyConnection) (err error) {
 		)
 	}()
 
+	tripper, ok := s.trippers[req.TunnelGroup]
+	if !ok {
+		err := fmt.Errorf("tunnel group not found: %q", req.TunnelGroup)
+		_ = w.write(err, protocol.CodeNotFound)
+		return err
+	}
+
 	if err := s.handler.Authenticate(&req); err != nil {
 		code := protocol.CodeServerError
 		if errors.Is(err, auth.ErrUnauthorized) {
@@ -394,13 +401,6 @@ func (s *Server) register(conn quic.EarlyConnection) (err error) {
 		}
 
 		_ = w.write(err, code)
-		return err
-	}
-
-	tripper, ok := s.trippers[req.TunnelGroup]
-	if !ok {
-		err := fmt.Errorf("tunnel group unknown: %q", req.TunnelGroup)
-		_ = w.write(err, protocol.CodeBadRequest)
 		return err
 	}
 
