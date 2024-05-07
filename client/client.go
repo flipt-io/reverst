@@ -141,7 +141,7 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 
 	// this signifies that the exponential backoff was exhausted or exceeded a deadline
 	// in this situation we simply return the last observed error in the dial and serve attempts
-	if wait.Interrupted(err) {
+	if !errors.Is(err, context.Canceled) && wait.Interrupted(err) {
 		err = lastErr
 	}
 
