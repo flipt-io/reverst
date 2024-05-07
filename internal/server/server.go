@@ -419,6 +419,8 @@ type responseWriter struct {
 }
 
 func (w *responseWriter) write(err error, code protocol.ResponseCode) error {
+	w.code = code
+
 	resp := &protocol.RegisterListenerResponse{
 		Version: protocol.Version,
 		Code:    code,
