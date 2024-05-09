@@ -187,8 +187,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 
 	listener, err := quic.ListenAddrEarly(s.conf.TunnelAddress, tlsConfig, &quic.Config{
-		MaxIdleTimeout:  s.conf.KeepAlivePeriod,
-		KeepAlivePeriod: s.conf.MaxIdleTimeout,
+		MaxIdleTimeout:  s.conf.MaxIdleTimeout,
+		KeepAlivePeriod: s.conf.KeepAlivePeriod,
 	})
 	if err != nil {
 		return err
