@@ -81,14 +81,21 @@ func (s *Set[T]) Next(ctx context.Context) (t T, ok bool, err error) {
 		}
 
 		var (
-			cur  = s.last.Load()
-			next = cur + 1
+			observed = s.last.Load()
+			cur      = observed
+			count    = uint64(len(s.entries))
 		)
-		if next >= uint64(len(s.entries)) {
+
+		if cur >= count {
+			cur = 0
+		}
+
+		next := cur + 1
+		if next >= count {
 			next = 0
 		}
 
-		if s.last.CompareAndSwap(cur, next) {
+		if s.last.CompareAndSwap(observed, next) {
 			return s.entries[cur], true, nil
 		}
 	}
