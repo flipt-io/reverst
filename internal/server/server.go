@@ -562,13 +562,12 @@ func (d readerFromDecorator) ReadFrom(r io.Reader) (n int64, err error) {
 func logHandler(log *slog.Logger, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now().UTC()
-		log = log.With("path", r.URL.Path, "started_at", start)
+		log := log.With("path", r.URL.Path)
 		log.Debug("Request started")
 
 		wr := &statusInterceptResponseWriter{ResponseWriter: w}
 		defer func() {
-			finished := time.Now().UTC()
-			log.Debug("Request finished", "code", wr.code, "finished_at", finished, "ellapsed", time.Since(finished))
+			log.Debug("Request finished", "code", wr.code, "ellapsed", time.Since(start))
 		}()
 
 		h.ServeHTTP(wr, r)
