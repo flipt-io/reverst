@@ -48,11 +48,13 @@ func (s *Set[T]) Register(ctx context.Context, t T) {
 }
 
 func (s *Set[T]) Remove(t T) {
+	var evicted bool
+
 	s.mu.Lock()
 	defer func() {
 		s.mu.Unlock()
 
-		if s.evicted != nil {
+		if s.evicted != nil && evicted {
 			s.evicted(t)
 		}
 	}()
@@ -60,6 +62,7 @@ func (s *Set[T]) Remove(t T) {
 	slog.Debug("roundrobbin set: removing entry")
 
 	s.entries = slices.DeleteFunc(s.entries, func(rt T) bool {
+		evicted = evicted || rt == t
 		return rt == t
 	})
 }
@@ -78,14 +81,21 @@ func (s *Set[T]) Next(ctx context.Context) (t T, ok bool, err error) {
 		}
 
 		var (
-			cur  = s.last.Load()
-			next = cur + 1
+			observed = s.last.Load()
+			cur      = observed
+			count    = uint64(len(s.entries))
 		)
-		if next >= uint64(len(s.entries)) {
+
+		if cur >= count {
+			cur = 0
+		}
+
+		next := cur + 1
+		if next >= count {
 			next = 0
 		}
 
-		if s.last.CompareAndSwap(cur, next) {
+		if s.last.CompareAndSwap(observed, next) {
 			return s.entries[cur], true, nil
 		}
 	}

@@ -64,7 +64,7 @@ func (m *Reverst) TestUnit(
 		WithEnvVariable("CGO_ENABLED", "1").
 		WithMountedDirectory("/src", source).
 		WithWorkdir("/src").
-		WithExec([]string{"go", "test", "-race", "./..."}).
+		WithExec([]string{"go", "test", "-race", "-count=5", "./..."}).
 		Stdout(ctx)
 	if err != nil {
 		return out, err
