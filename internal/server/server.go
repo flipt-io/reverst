@@ -240,7 +240,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	if s.conf.ManagementAddress != "" {
 		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.Handler())
+		mux.Handle("/metrics", logHandler(slog.With("component", "management"), promhttp.Handler()))
 		mux.HandleFunc("/debug/pprof/", pprof.Index)
 		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
@@ -557,6 +557,22 @@ type readerFromDecorator struct {
 
 func (d readerFromDecorator) ReadFrom(r io.Reader) (n int64, err error) {
 	return d.ResponseWriter.(io.ReaderFrom).ReadFrom(r)
+}
+
+func logHandler(log *slog.Logger, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now().UTC()
+		log = log.With("path", r.URL.Path, "started_at", start)
+		log.Debug("Request started")
+
+		wr := &statusInterceptResponseWriter{ResponseWriter: w}
+		defer func() {
+			finished := time.Now().UTC()
+			log.Debug("Request finished", "code", wr.code, "finished_at", finished, "ellapsed", time.Since(finished))
+		}()
+
+		h.ServeHTTP(wr, r)
+	})
 }
 
 type statusInterceptResponseWriter struct {
