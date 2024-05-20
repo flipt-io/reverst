@@ -42,13 +42,14 @@ func main() {
 	slog.Info("Connecting to tunnel", "tunnelGroup", host)
 
 	server := &client.Server{
-		TunnelGroup: host,
+		TunnelGroup: *srvName,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("PONG"))
 		}),
 		TLSConfig: &tls.Config{
-			NextProtos: []string{protocol.Name},
-			ServerName: *srvName,
+			NextProtos:         []string{protocol.Name},
+			ServerName:         *srvName,
+			InsecureSkipVerify: true,
 		},
 	}
 

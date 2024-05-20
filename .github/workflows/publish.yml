@@ -3,10 +3,10 @@ name: 'Publish'
 on:
   push:
     branches:
-    - main
+    - gh-readonly-queue/**
 
 jobs:
-  dagger:
+  publish-image:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -19,6 +19,6 @@ jobs:
         with:
           version: "0.10.3"
           verb: call
-          args: publish --source . --password env:GITHUB_TOKEN
+          args: publish --source . --password env:GITHUB_TOKEN --tag ${{ github.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
