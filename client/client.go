@@ -111,16 +111,9 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 	log := slog.New(coallesce(s.Logger, slog.Default()).Handler().WithAttrs(attrs))
 	log.Debug("Dialing address")
 
-	tlsConf, err := s.getTLSConfig(addr)
-	if err != nil {
-		return err
-	}
-
-	quicConf := coallesce(s.QuicConfig, DefaultQuicConfig)
-
 	var lastErr error
 	err = wait.ExponentialBackoffWithContext(ctx, DefaultBackoff, func(context.Context) (done bool, err error) {
-		err = s.dialAndServe(ctx, log, addr, tlsConf, quicConf)
+		err = s.dialAndServe(ctx, log, addr)
 		if err != nil {
 			lastErr = err
 			if errors.Is(err, context.Canceled) {
@@ -152,9 +145,12 @@ func (s *Server) dialAndServe(
 	ctx context.Context,
 	log *slog.Logger,
 	addr string,
-	tlsConf *tls.Config,
-	quicConf *quic.Config,
 ) error {
+	tlsConf, err := s.getTLSConfig(addr)
+	if err != nil {
+		return err
+	}
+
 	conn, err := quic.DialAddr(ctx,
 		addr,
 		tlsConf,
