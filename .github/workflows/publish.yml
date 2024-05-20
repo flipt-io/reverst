@@ -1,6 +1,7 @@
 name: 'Publish'
 
 on:
+  merge_group:
   push:
     branches:
     - gh-readonly-queue/**
