@@ -155,6 +155,9 @@ func (m *Reverst) Publish(
 	//+optional
 	//+default="reverst"
 	image string,
+	//+optional
+	//+default="latest"
+	tag string,
 ) (string, error) {
 	ctr, err := m.BuildContainer(ctx, source)
 	if err != nil {
@@ -163,7 +166,7 @@ func (m *Reverst) Publish(
 
 	return ctr.
 		WithRegistryAuth(registry, username, password).
-		Publish(ctx, fmt.Sprintf("%s/%s/%s", registry, username, image))
+		Publish(ctx, fmt.Sprintf("%s/%s/%s:%s", registry, username, image, tag))
 }
 
 func generateKeyPair() ([]byte, []byte, error) {
