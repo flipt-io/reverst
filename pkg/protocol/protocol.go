@@ -3,6 +3,7 @@ package protocol
 import (
 	"io"
 
+	"github.com/quic-go/quic-go"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -12,6 +13,9 @@ const (
 	Version uint8 = 1
 )
 
+// deprecated: we're going to reply on ApplicationCode going forward
+// and close connections under these application error conditions
+//
 //go:generate stringer -type=ResponseCode
 type ResponseCode uint8
 
@@ -23,16 +27,16 @@ const (
 	CodeServerError
 )
 
-// ApplicationCode is returned on stream and connection errors
-type ApplicationCode int
-
 const (
 	// ApplicationOK is returned when the stream or connection is being closed
 	// intentionally with no error as the client is going away
-	ApplicationOK = 0x0
+	ApplicationOK = quic.ApplicationErrorCode(0x0)
 	// ApplicationError is returned when something went wrong
 	// The client can attempt to reconnect in this situation
-	ApplicationError = 0x1
+	ApplicationError = quic.ApplicationErrorCode(0x1)
+	// ApplicationClientError is return when the something went
+	// wrong handling a clients request
+	ApplicationClientError = quic.ApplicationErrorCode(0x2)
 )
 
 type RegisterListenerRequest struct {
@@ -42,7 +46,9 @@ type RegisterListenerRequest struct {
 }
 
 type RegisterListenerResponse struct {
-	Version  uint8
+	Version uint8
+	// deprecated: we're going to rely on ApplicationCode instead
+	// and always close with connection with the relevant error code
 	Code     ResponseCode
 	Metadata map[string]string
 	Body     []byte

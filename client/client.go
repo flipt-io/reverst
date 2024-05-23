@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -38,6 +39,19 @@ var (
 		Factor:   2.0,
 		Jitter:   0.1,
 	}
+
+	// ErrNotFound is returned when a tunnel group is referenced that the
+	// target reverst tunnel server does not known (CodeNotFound)
+	ErrNotFound = errors.New("not found")
+	// ErrBadRequest is returned when a tunnel registration request is rejected
+	// due to an unexpected request payload (CodeBadRequest)
+	ErrBadRequest = errors.New("bad request")
+	// ErrUnauthorized is returned when the caller is not properly authenticated to
+	// establish a tunnel on the request tunnel group (CodeUnauthorized)
+	ErrUnauthorized = errors.New("unauthorized")
+	// ErrServerError is returned when something unexplained went wrong on the
+	// remote reverst tunnel server (CodeServerError)
+	ErrServerError = errors.New("server error")
 )
 
 // Server is an alternative HTTP server that dials to a reverst Tunnel server
@@ -145,7 +159,13 @@ func (s *Server) dialAndServe(
 	ctx context.Context,
 	log *slog.Logger,
 	addr string,
-) error {
+) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("dialing and registering connection: %w", err)
+		}
+	}()
+
 	tlsConf, err := s.getTLSConfig(addr)
 	if err != nil {
 		return err
@@ -170,7 +190,26 @@ func (s *Server) dialAndServe(
 
 	// register server as a listener on remote tunnel
 	if err := s.register(conn); err != nil {
-		return err
+		var aerr *quic.ApplicationError
+		if errors.As(err, &aerr) {
+			switch aerr.ErrorCode {
+			case protocol.ApplicationError:
+				return fmt.Errorf("%s: %w", aerr.ErrorMessage, ErrServerError)
+			case protocol.ApplicationClientError:
+				switch aerr.ErrorMessage {
+				case "unauthorized":
+					return fmt.Errorf("%s: %w", aerr.ErrorMessage, ErrUnauthorized)
+				case "not found":
+					return fmt.Errorf("%s: %w", aerr.ErrorMessage, ErrNotFound)
+				case "bad request":
+					return fmt.Errorf("%s: %w", aerr.ErrorMessage, ErrBadRequest)
+				}
+
+				return fmt.Errorf("%s: %w", aerr.ErrorMessage, err)
+			}
+		}
+
+		return fmt.Errorf("dialing and registering connection: %w", err)
 	}
 
 	log.Info("Starting server")
@@ -212,11 +251,13 @@ func (s *Server) register(conn quic.Connection) error {
 
 	resp, err := dec.Decode()
 	if err != nil {
-		return fmt.Errorf("decoding register listener response: %w", err)
-	}
+		// we should decode at-least one response message
+		// or receive and error
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
 
-	if resp.Code != protocol.CodeOK {
-		return fmt.Errorf("unexpected response code: %s", resp.Code)
+		return fmt.Errorf("decoding register listener response: %w", err)
 	}
 
 	if s.OnConnectionReady != nil {

@@ -30,6 +30,9 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
+// ErrNotFound is returned when a requested tunnel group cannot be located
+var ErrNotFound = errors.New("not found")
+
 type Server struct {
 	conf config.Config
 
@@ -216,15 +219,15 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			slog.Debug("Accepted connection", "version", conn.ConnectionState().Version)
 
 			if err := s.register(conn); err != nil {
+				code := protocol.ApplicationError
 				level := slog.LevelError
 				if errors.Is(err, auth.ErrUnauthorized) {
+					code = protocol.ApplicationClientError
 					level = slog.LevelDebug
 				}
 
-				// close connection with error
-				conn.CloseWithError(1, err.Error())
-
-				slog.Log(ctx, level, "Registering connection", "error", err)
+				slog.Log(ctx, level, "Closing connection", "error", err)
+				conn.CloseWithError(code, cause(err).Error())
 
 				continue
 			}
@@ -368,43 +371,35 @@ func (s *Server) register(conn quic.EarlyConnection) (err error) {
 		return fmt.Errorf("decoding register listener request: %w", err)
 	}
 
-	w := &responseWriter{enc: protocol.NewEncoder[protocol.RegisterListenerResponse](stream)}
+	w := &responseWriter{
+		enc: protocol.NewEncoder[protocol.RegisterListenerResponse](stream),
+	}
+
 	defer func() {
 		w.enc.Close()
 
-		code := protocol.CodeServerError
-		if w != nil {
-			code = w.code
+		attrs := []attribute.KeyValue{tunnelGroupKey.String(req.TunnelGroup)}
+		if err != nil {
+			attrs = append(attrs, errorKey.String(cause(err).Error()))
 		}
+
 		s.tunnelGroupRegistrationsTotal.Add(
 			context.Background(),
 			1,
-			metric.WithAttributes(
-				tunnelGroupKey.String(req.TunnelGroup),
-				statusKey.String(code.String()),
-			),
+			metric.WithAttributes(attrs...),
 		)
 	}()
 
 	tripper, ok := s.trippers[req.TunnelGroup]
 	if !ok {
-		err := fmt.Errorf("tunnel group not found: %q", req.TunnelGroup)
-		_ = w.write(err, protocol.CodeNotFound)
-		return err
+		return fmt.Errorf("tunnel group: %q: %w", req.TunnelGroup, ErrNotFound)
 	}
 
 	if err := s.handler.Authenticate(&req); err != nil {
-		code := protocol.CodeServerError
-		if errors.Is(err, auth.ErrUnauthorized) {
-			code = protocol.CodeUnauthorized
-			return err
-		}
-
-		_ = w.write(err, code)
 		return err
 	}
 
-	if err := w.write(nil, protocol.CodeOK); err != nil {
+	if err := w.write(nil); err != nil {
 		return fmt.Errorf("encoding register listener response: %w", err)
 	}
 
@@ -414,23 +409,18 @@ func (s *Server) register(conn quic.EarlyConnection) (err error) {
 }
 
 type responseWriter struct {
-	enc  protocol.Encoder[protocol.RegisterListenerResponse]
-	code protocol.ResponseCode
+	enc protocol.Encoder[protocol.RegisterListenerResponse]
 }
 
-func (w *responseWriter) write(err error, code protocol.ResponseCode) error {
-	w.code = code
-
-	resp := &protocol.RegisterListenerResponse{
+func (w *responseWriter) write(body []byte) error {
+	return w.enc.Encode(&protocol.RegisterListenerResponse{
 		Version: protocol.Version,
-		Code:    code,
-	}
-
-	if err != nil {
-		resp.Body = []byte(err.Error())
-	}
-
-	return w.enc.Encode(resp)
+		// deprecated: this is going away and we will always
+		// just close the connection in the future and explain
+		// why via the application error code on close
+		Code: protocol.CodeOK,
+		Body: body,
+	})
 }
 
 type roundRobbinTripper struct {
@@ -454,7 +444,7 @@ func newRoundRobbinTipper(meter metric.Meter, tunnelGroup string) (_ *roundRobbi
 		return nil, err
 	}
 
-	tr.set = roundrobbin.NewSet[http.RoundTripper](
+	tr.set = roundrobbin.NewSet(
 		roundrobbin.WithOnEvict(func(http.RoundTripper) {
 			tr.activeConnectionsCount.Add(
 				context.Background(),
@@ -586,4 +576,13 @@ func (s *statusInterceptResponseWriter) WriteHeader(code int) {
 
 func (s *statusInterceptResponseWriter) StatusCode() int {
 	return s.code
+}
+
+func cause(err error) (cerr error) {
+	cerr = err
+	if err = errors.Unwrap(err); err != nil {
+		return cause(err)
+	}
+
+	return
 }

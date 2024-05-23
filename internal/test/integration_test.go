@@ -56,6 +56,31 @@ func TestHelloWorld(t *testing.T) {
 	_ = group.Wait()
 }
 
+func TestUnauthorized(t *testing.T) {
+	if !*integrationTest {
+		t.Skip("integration testing disabled")
+		return
+	}
+
+	var tunnelAddr = fmt.Sprintf("%s:%d", *integrationHost, *integrationTunnelPort)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	server := &client.Server{
+		TunnelGroup: "local.example",
+		Handler:     &http.ServeMux{},
+		TLSConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			NextProtos:         []string{protocol.Name},
+			ServerName:         "local.example",
+		},
+		Authenticator: client.BasicAuthenticator("user", "wrongpassword"),
+	}
+
+	require.ErrorIs(t, server.DialAndServe(ctx, tunnelAddr), client.ErrUnauthorized)
+}
+
 func TestMultipleTunnels(t *testing.T) {
 	if !*integrationTest {
 		t.Skip("integration testing disabled")

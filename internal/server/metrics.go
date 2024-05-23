@@ -14,5 +14,6 @@ const (
 var (
 	tunnelGroupKey = attribute.Key("tunnel_group")
 	hostKey        = attribute.Key("host")
-	statusKey      = attribute.Key("status")
+	statusKey      = attribute.Key("error")
+	errorKey       = attribute.Key("error")
 )
