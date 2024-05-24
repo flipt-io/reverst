@@ -134,6 +134,14 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 				return false, nil
 			}
 
+			// these errors are considered non-recoverable
+			// not-found is considered recoverable under the situation that the
+			// tunnel has recently been requested for provisioning and is coming online
+			if errors.Is(err, ErrUnauthorized) ||
+				errors.Is(err, ErrBadRequest) {
+				return false, err
+			}
+
 			// we log out the error under debug as this function will be repeated
 			// and hopefully will eventually succeed
 			// if not then the last observed error should be returned and logged
