@@ -1,10 +1,8 @@
 name: 'Publish'
 
 on:
+  workflow_dispatch:
   merge_group:
-  push:
-    branches:
-    - gh-readonly-queue/**
 
 jobs:
   publish-image:
