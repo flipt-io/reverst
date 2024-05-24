@@ -15,4 +15,5 @@ var (
 	tunnelGroupKey = attribute.Key("tunnel_group")
 	hostKey        = attribute.Key("host")
 	statusKey      = attribute.Key("status")
+	errorKey       = attribute.Key("error")
 )
