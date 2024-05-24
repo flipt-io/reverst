@@ -188,28 +188,45 @@ func (s *Server) dialAndServe(
 
 	log.Debug("Attempting to register")
 
-	// register server as a listener on remote tunnel
-	if err := s.register(conn); err != nil {
+	for {
+		// register server as a listener on remote tunnel
+		err := s.register(conn)
+		if err == nil {
+			break
+		}
+
+		// in the event a stream was closed unexpectedly while handling
+		// registration then the likelihood is that the server went away
+		// and will ultimately close the connection with the reason
+		// expressed in the application error code and message
+		// so we instead re-attempt registration in this scenario and
+		// let it fail attempting to open another stream with the
+		// connections application error instead
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			continue
+		}
+
+		message := "unexpected error"
 		var aerr *quic.ApplicationError
 		if errors.As(err, &aerr) {
+			message = aerr.ErrorMessage
 			switch aerr.ErrorCode {
 			case protocol.ApplicationError:
-				return fmt.Errorf("%s: %w", aerr.ErrorMessage, ErrServerError)
+				err = ErrServerError
 			case protocol.ApplicationClientError:
+				message = "client error"
 				switch aerr.ErrorMessage {
 				case "unauthorized":
-					return fmt.Errorf("%s: %w", aerr.ErrorMessage, ErrUnauthorized)
+					err = ErrUnauthorized
 				case "not found":
-					return fmt.Errorf("%s: %w", aerr.ErrorMessage, ErrNotFound)
+					err = ErrNotFound
 				case "bad request":
-					return fmt.Errorf("%s: %w", aerr.ErrorMessage, ErrBadRequest)
+					err = ErrBadRequest
 				}
-
-				return fmt.Errorf("%s: %w", aerr.ErrorMessage, err)
 			}
 		}
 
-		return fmt.Errorf("dialing and registering connection: %w", err)
+		return fmt.Errorf("%s: %w", message, err)
 	}
 
 	log.Info("Starting server")
@@ -220,7 +237,7 @@ func (s *Server) dialAndServe(
 func (s *Server) register(conn quic.Connection) error {
 	stream, err := conn.OpenStream()
 	if err != nil {
-		return fmt.Errorf("accepting stream: %w", err)
+		return fmt.Errorf("opening stream: %w", err)
 	}
 
 	defer stream.Close()
@@ -251,8 +268,9 @@ func (s *Server) register(conn quic.Connection) error {
 
 	resp, err := dec.Decode()
 	if err != nil {
-		// we should decode at-least one response message
-		// or receive and error
+		// EOF is not expected at this point, so we adapt it
+		// The calling code is expected to introspect into
+		// the state of the connection at this point
 		if errors.Is(err, io.EOF) {
 			err = io.ErrUnexpectedEOF
 		}
