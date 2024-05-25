@@ -17,11 +17,12 @@ The tunnel binary is intended to be deployed on the public internet.
 Client servers then dial out to the tunnels and register themselves on target tunnel groups.
 A tunnel group is a load-balanced set of client-servers, which is exposed through the reverst tunnel HTTP interface.
 
-<p align="center">
-  <img width="800" height="1199" src="./diagram.png" alt="Tunnel Lifecycle">
-</p>
-
 ## Client
+
+[![Go Reference](https://pkg.go.dev/badge/go.flipt.io/reverst/client.svg)](https://pkg.go.dev/go.flipt.io/reverst/client)
+
+The following section refers to the Go tunnel client code.
+This can be added as a dependency to any Go code that requires exposing through a `reverstd` tunnel server.
 
 ### Install
   
@@ -35,9 +36,11 @@ go get go.flipt.io/reverst/client
 go install ./client/...
 ```
 
-## Server
+## Server and CLI
 
 ### Building
+
+The following builds both `reverstd` (tunnel server) and `reverst` (tunnel cli client).
 
 ```console
 go install ./cmd/...
@@ -47,61 +50,23 @@ go install ./cmd/...
 
 Reverst uses Dagger to setup and run an integration test suite.
 
+#### Unit
+
 ```console
-dagger call test --source=.
+dagger call testUnit --source=.
+```
+
+#### Integration
+
+```console
+dagger call testIntegration --source=.
 ```
 
 The test suite sets up a tunnel, registers a server-client to the tunnel and then requests the service through the tunnels HTTP interface.
 
-### Running
+### Examples
 
-The following walks through experimenting with the [./examples/simple](./examples/simple) server example.
-This directory contains a number of things needed to stand up reverst and a registering client server:
-
-- The example service in [./examples/simple/main.go](./examples/simple/main.go).
-- Simple self-signed TLS private key and certificate.
-- A tunnel-groups file for routing decisions.
-
-#### Running `reverst`
-
-The following runs the tunnel server with:
-
-- The QUIC tunnel listener on `127.0.0.1:7171`
-- The HTTP serving listener on `127.0.0.1:8181`
-- Logging with `debug` level
-- A TLS server-name of `flipt.dev.local`
-- Some tunnel group definitions with a single tunnel group
-  - The group has the name `flipt.dev.local`
-  - The group is reachable under the same host name
-  - The group requires basic username and password authentication
-- The dummy TLS certificates
-
-```console
-go run ./cmd/reverst/... -l debug \
-    -n flipt.dev.local \
-    -g examples/simple/group.yml \
-    -k examples/simple/server.key \
-    -c examples/simple/server.crt
-```
-
-#### Running example server
-
-Now you can run the example server.
-This is a simple HTTP server that responds to all requests with `PONG`.
-It is setup to use the server client to register as a listener on the tunnel.
-
-```console
-go run ./examples/simple/main.go --username user --password pass
-```
-
-#### Making requests
-
-You can now curl the tunnel and requests will be forward all the way through to the example server.
-Be sure to include the `Host` header, as this is used to route requests to the respective tunnel-group.
-
-```curl
-curl -H 'Host: flipt.dev.local' 127.0.0.1:8181/fo
-```
+Head over to the [examples](./examples) directory for some walkthroughs running `reverstd` and `reverst`.
 
 ### Usage and Configuration
 
@@ -110,12 +75,12 @@ curl -H 'Host: flipt.dev.local' 127.0.0.1:8181/fo
 The following flags can be used to configure a running instance of the `reverst` server.
 
 ```console
-➜  reverst -h
+➜  reverstd -h
 COMMAND
-  reverst
+  reverstd
 
 USAGE
-  reverst [FLAGS]
+  reverstd [FLAGS]
 
 FLAGS
   -l, --log LEVEL                    debug, info, warn or error (default: INFO)
