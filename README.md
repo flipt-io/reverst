@@ -1,11 +1,11 @@
 reverst: HTTP reverse tunnels over QUIC
 ---------------------------------------
 
-> Ti esrever dna ti pilf nwod gnaht ym tup i
-
 <p align="center">
   <img width="300" height="300" src="./docs/gopher-glasses.svg" alt="Tunnel Gopher">
 </p>
+
+> Ti esrever dna ti pilf nwod gnaht ym tup i
 
 Reverst is a (load-balanced) reverse-tunnel server and Go server-client library built on QUIC and HTTP/3.
 
