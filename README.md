@@ -110,12 +110,12 @@ Both tunnel group sources support watching sources for changes over time (see `-
 
 - Local filesystem (`file://[path]`)
 
-The standard and simplest method is to point reverst at your configuration YAML file on your machine via its path.
+The standard and simplest method is to point `reverstd` at your configuration YAML file on your machine via its path.
 
 ```console
-reverst -g path/to/configuration.yml
+reverstd -g path/to/configuration.yml
 // alternatively:
-reverst -g file:///path/to/configuration.yml
+reverstd -g file:///path/to/configuration.yml
 ```
 
 - Kubernetes ConfigMap `k8s://configmap/[namespace]/[name]/[key]`
@@ -123,12 +123,12 @@ reverst -g file:///path/to/configuration.yml
 Alternatively, you can configure reverst to connect to a Kubernetes API server and fetch / watch configuration from.
 
 ```console
-reverst -g k8s://configmap/default/tunnelconfig/groups.yml
+reverstd -g k8s://configmap/default/tunnelconfig/groups.yml
 ```
 
 **defining**
 
-The reverst server take a path to a YAML encoded file, which identifies the tunnel groups to be hosted.
+The `reverstd` server take a path to a YAML encoded file, which identifies the tunnel groups to be hosted.
 A tunnel group is a load-balancer on which tunneled servers can register themselves.
 The file contains a top-level key groups, under which each tunnel group is uniquely named.
 
