@@ -17,7 +17,7 @@ import (
 )
 
 func main() {
-	flags := ff.NewFlagSet("reverst")
+	flags := ff.NewFlagSet("reverstd")
 
 	var conf config.Config
 	if err := flags.AddStruct(&conf); err != nil {
@@ -25,8 +25,8 @@ func main() {
 	}
 
 	cmd := &ff.Command{
-		Name:  "reverst",
-		Usage: "reverst [FLAGS]",
+		Name:  "reverstd",
+		Usage: "reverstd [FLAGS]",
 		Flags: flags,
 		Exec: func(ctx context.Context, args []string) error {
 			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
