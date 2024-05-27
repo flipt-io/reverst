@@ -43,14 +43,14 @@ func (m *Reverst) BuildContainer(
 		Go().
 		FromVersion("1.22-alpine3.18").
 		Build(source, dagger.GoBuildOpts{
-			Packages: []string{"./cmd/reverst/..."},
+			Packages: []string{"./cmd/reverstd/..."},
 		})
 
 	return dag.
 		Container().
 		From("alpine:3.18").
-		WithFile("/usr/local/bin/reverst", build.File("reverst")).
-		WithEntrypoint([]string{"reverst"}), nil
+		WithFile("/usr/local/bin/reverstd", build.File("reverstd")).
+		WithEntrypoint([]string{"reverstd"}), nil
 }
 
 func (m *Reverst) TestUnit(

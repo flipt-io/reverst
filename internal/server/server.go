@@ -6,11 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/http/pprof"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -24,28 +25,23 @@ import (
 	"go.flipt.io/reverst/internal/roundrobbin"
 	"go.flipt.io/reverst/pkg/protocol"
 	"go.opentelemetry.io/otel/attribute"
-	prom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
 // ErrNotFound is returned when a requested tunnel group cannot be located
 var ErrNotFound = errors.New("not found")
 
 type Server struct {
+	metrics
+
 	conf config.Config
 
 	mu      sync.RWMutex
 	handler protocol.AuthenticationHandler
-	// trippers maps tunnel group identifiers onto roundRobbinTripper instances
-	trippers map[string]*roundRobbinTripper
-	// clients maps host names onto target clients
-	clients map[string]*http.Client
-
-	tunnelGroupRegistrationsTotal metric.Int64Counter
-	proxyRequestsHandledTotal     metric.Int64Counter
-	proxyRequestsLatency          metric.Float64Histogram
+	// trippersByGroup maps tunnel group names onto roundRobbinTripper instances
+	trippersByGroup map[string]*roundRobbinTripper
+	// handlersByHost maps host names onto target proxy handlers
+	handlersByHost map[string]*httputil.ReverseProxy
 }
 
 // New constructs and configures a new reverst Server.
@@ -56,44 +52,19 @@ func New(conf config.Config, groupChan <-chan *config.TunnelGroups) (*Server, er
 	}
 
 	s := &Server{
-		conf:     conf,
-		handler:  groups.AuthenticationHandler(),
-		trippers: map[string]*roundRobbinTripper{},
-		clients:  map[string]*http.Client{},
-	}
-	meter := noop.NewMeterProvider().Meter(meterName)
-	if conf.ManagementAddress != "" {
-		exporter, err := prom.New()
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
-		meter = provider.Meter(meterName)
+		conf:            conf,
+		handler:         groups.AuthenticationHandler(),
+		trippersByGroup: map[string]*roundRobbinTripper{},
+		handlersByHost:  map[string]*httputil.ReverseProxy{},
 	}
 
 	var err error
-	s.tunnelGroupRegistrationsTotal, err = meter.Int64Counter(
-		prometheus.BuildFQName(namespace, tunnelGroupSubsystem, "registrations_total"),
-		metric.WithDescription("Total number of registration attempts handled by tunnel group and status code"),
-	)
+	s.metrics, err = newMetrics(conf.ManagementAddress)
 	if err != nil {
 		return nil, err
 	}
 
-	s.proxyRequestsHandledTotal, err = meter.Int64Counter(
-		prometheus.BuildFQName(namespace, proxySubsystem, "requests_total"),
-		metric.WithDescription("Total number of requests handled by host and response code"),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	s.proxyRequestsLatency, err = meter.Float64Histogram(
-		prometheus.BuildFQName(namespace, proxySubsystem, "requests_latency"),
-		metric.WithDescription("Latency of requests per host and response code"),
-		metric.WithUnit("ms"),
-	)
+	target, err := url.Parse("https://" + conf.TunnelAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -101,19 +72,14 @@ func New(conf config.Config, groupChan <-chan *config.TunnelGroups) (*Server, er
 	for name, group := range groups.Groups {
 		slog.Debug("Registering tunnel group", "name", name, "hosts", group.Hosts)
 
-		tripper, err := newRoundRobbinTipper(meter, name)
+		tripper, err := newRoundRobbinTipper(s.Meter, name)
 		if err != nil {
 			return nil, err
 		}
 
-		s.trippers[name] = tripper
-
-		client := &http.Client{
-			Transport: tripper,
-		}
-
+		s.trippersByGroup[name] = tripper
 		for _, host := range group.Hosts {
-			s.clients[host] = client
+			s.handlersByHost[host] = proxyHandler(tripper, target)
 		}
 	}
 
@@ -133,40 +99,36 @@ func New(conf config.Config, groupChan <-chan *config.TunnelGroups) (*Server, er
 
 				// add any new trippers and associated clients
 				for name, group := range groups.Groups {
-					tripper, ok := s.trippers[name]
+					tripper, ok := s.trippersByGroup[name]
 					if !ok {
 						var err error
-						tripper, err = newRoundRobbinTipper(meter, name)
+						tripper, err = newRoundRobbinTipper(s.Meter, name)
 						if err != nil {
 							slog.Error("Building client transport", "error", err)
 							continue
 						}
 
-						s.trippers[name] = tripper
-					}
-
-					client := &http.Client{
-						Transport: tripper,
+						s.trippersByGroup[name] = tripper
 					}
 
 					for _, host := range group.Hosts {
-						s.clients[host] = client
+						s.handlersByHost[host] = proxyHandler(tripper, target)
 					}
 				}
 
-				// remove trippers and clients for now non-existent groups
-				for name, tripper := range s.trippers {
+				// remove trippers for now non-existent groups
+				for name, tripper := range s.trippersByGroup {
 					if _, ok := groups.Groups[name]; ok {
 						continue
 					}
 
-					for name, client := range s.clients {
-						if client.Transport == tripper {
-							delete(s.clients, name)
+					for name, h := range s.handlersByHost {
+						if h.Transport == tripper {
+							delete(s.handlersByHost, name)
 						}
 					}
 
-					delete(s.trippers, name)
+					delete(s.trippersByGroup, name)
 				}
 			}()
 
@@ -175,6 +137,12 @@ func New(conf config.Config, groupChan <-chan *config.TunnelGroups) (*Server, er
 	}()
 
 	return s, nil
+}
+
+func proxyHandler(tripper http.RoundTripper, target *url.URL) *httputil.ReverseProxy {
+	handler := httputil.NewSingleHostReverseProxy(target)
+	handler.Transport = tripper
+	return handler
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -317,7 +285,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	s.mu.RLock()
-	client, ok := s.clients[host]
+	handler, ok := s.handlersByHost[host]
 	s.mu.RUnlock()
 	if !ok {
 		log.Debug("Unexpected client host requested", "host", host)
@@ -325,30 +293,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r = r.Clone(r.Context())
-	r.URL.Scheme = "https"
-	r.URL.Host = s.conf.TunnelAddress
-	r.RequestURI = ""
+	handler.ServeHTTP(w, r)
 
-	resp, err := client.Do(r)
-	if err != nil {
-		log.Error("Performing round trip", "error", err)
-		http.Error(w, "bad gateway", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-
-	w.WriteHeader(resp.StatusCode)
-
-	_, err = io.Copy(w, resp.Body)
-
-	for k, v := range resp.Trailer {
-		w.Header()[k] = v
-	}
+	return
 }
 
 // register adds a newly accepted connection onto the identified target tunnel group.
@@ -390,7 +337,7 @@ func (s *Server) register(conn quic.EarlyConnection) (err error) {
 		)
 	}()
 
-	tripper, ok := s.trippers[req.TunnelGroup]
+	tripper, ok := s.trippersByGroup[req.TunnelGroup]
 	if !ok {
 		return fmt.Errorf("tunnel group: %q: %w", req.TunnelGroup, ErrNotFound)
 	}
@@ -484,8 +431,10 @@ func (r *roundRobbinTripper) register(first quic.EarlyConnection) {
 
 func (r *roundRobbinTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	defer func() {
-		_, _ = io.Copy(io.Discard, req.Body)
-		_ = req.Body.Close()
+		if req.Body != nil {
+			_, _ = io.Copy(io.Discard, req.Body)
+			_ = req.Body.Close()
+		}
 	}()
 
 	for {

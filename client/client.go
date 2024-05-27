@@ -123,7 +123,7 @@ func (s *Server) DialAndServe(ctx context.Context, addr string) (err error) {
 	}
 
 	log := slog.New(coallesce(s.Logger, slog.Default()).Handler().WithAttrs(attrs))
-	log.Debug("Dialing address")
+	log.Debug("Dialing tunnel")
 
 	var lastErr error
 	err = wait.ExponentialBackoffWithContext(ctx, DefaultBackoff, func(context.Context) (done bool, err error) {
@@ -237,7 +237,7 @@ func (s *Server) dialAndServe(
 		return fmt.Errorf("%s: %w", message, err)
 	}
 
-	log.Info("Starting server")
+	log.Info("Starting reverse server")
 
 	return (&http3.Server{Handler: s.Handler}).ServeQUICConn(conn)
 }

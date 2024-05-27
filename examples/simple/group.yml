@@ -1,7 +1,7 @@
 groups:
-  "flipt.dev.local":
+  "localhost":
     hosts:
-    - "flipt.dev.local"
+    - "localhost"
     authentication:
       basic:
         username: "user"
