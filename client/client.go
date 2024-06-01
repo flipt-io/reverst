@@ -41,7 +41,7 @@ var (
 	}
 
 	// ErrNotFound is returned when a tunnel group is referenced that the
-	// target reverst tunnel server does not known (CodeNotFound)
+	// target reverst tunnel server does not know (CodeNotFound)
 	ErrNotFound = errors.New("not found")
 	// ErrBadRequest is returned when a tunnel registration request is rejected
 	// due to an unexpected request payload (CodeBadRequest)
@@ -56,7 +56,7 @@ var (
 
 // Server is an alternative HTTP server that dials to a reverst Tunnel server
 // and attempts to remotely register itself as a listener.
-// Given the connection is established and authorized as a valid listener the
+// Given the connection is established and authorized as a valid listener, the
 // server switches into serving mode and handles HTTP/3 requests over the connection.
 // The Tunnel should forward requests to this connection and any others in the
 // same tunnel group. The group is identified via the TLSConfig.ServerName.

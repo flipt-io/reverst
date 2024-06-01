@@ -34,6 +34,8 @@ func watchFSNotify(ctx context.Context, ch chan<- *TunnelGroups, path string, wa
 
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case event, ok := <-watcher.Events:
 				if !ok {
 					return
