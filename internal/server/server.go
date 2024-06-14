@@ -520,6 +520,7 @@ type statusInterceptResponseWriter struct {
 }
 
 func (s *statusInterceptResponseWriter) WriteHeader(code int) {
+	s.ResponseWriter.WriteHeader(code)
 	s.code = code
 }
 
