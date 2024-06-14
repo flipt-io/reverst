@@ -56,6 +56,40 @@ func TestHelloWorld(t *testing.T) {
 	_ = group.Wait()
 }
 
+func TestBadRequest(t *testing.T) {
+	if !*integrationTest {
+		t.Skip("integration testing disabled")
+		return
+	}
+
+	var (
+		tunnelAddr    = fmt.Sprintf("%s:%d", *integrationHost, *integrationTunnelPort)
+		tunnelHTTPURL = fmt.Sprintf("http://%s:%d", *integrationHost, *integrationHTTPPort)
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	var group errgroup.Group
+	startServer(t, ctx, &group, tunnelAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad request", http.StatusBadRequest)
+	}))
+
+	resp, err := http.Get(tunnelHTTPURL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	bytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "bad request\n", string(bytes))
+
+	cancel()
+
+	_ = group.Wait()
+}
+
 func TestUnauthorized(t *testing.T) {
 	if !*integrationTest {
 		t.Skip("integration testing disabled")
