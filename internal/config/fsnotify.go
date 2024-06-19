@@ -11,7 +11,7 @@ import (
 )
 
 func watchFSNotify(ctx context.Context, ch chan<- *TunnelGroups, path string, watch bool) error {
-	groups, err := buildTunnelGroupsAtPath(path)
+	groups, err := buildTunnelGroupsAtPath(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func watchFSNotify(ctx context.Context, ch chan<- *TunnelGroups, path string, wa
 					continue
 				}
 
-				groups, err := buildTunnelGroupsAtPath(path)
+				groups, err := buildTunnelGroupsAtPath(ctx, path)
 				if err != nil {
 					slog.Error("reading tunnel groups: %w", err)
 					continue
@@ -76,7 +76,7 @@ func watchFSNotify(ctx context.Context, ch chan<- *TunnelGroups, path string, wa
 	return nil
 }
 
-func buildTunnelGroupsAtPath(path string) (*TunnelGroups, error) {
+func buildTunnelGroupsAtPath(ctx context.Context, path string) (*TunnelGroups, error) {
 	fi, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading tunnel groups: %w", err)
@@ -89,7 +89,7 @@ func buildTunnelGroupsAtPath(path string) (*TunnelGroups, error) {
 		return nil, fmt.Errorf("decoding tunnel groups: %w", err)
 	}
 
-	if err := groups.Validate(); err != nil {
+	if err := groups.Validate(ctx); err != nil {
 		return nil, fmt.Errorf("validating tunnel groups: %w", err)
 	}
 

@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	basic        = HandleBasic("morty", "gazorpazorp")
-	bearer       = HandleBearer("plumbus")
-	bearerHashed = HandleBearerHashed(mustHexDecodeString("34831eccb70007e3ed06bb8ba0e2c80e661c440d09fb6513c96cd1fdeb5c57cc"))
-	external     Handler
+	basic          = HandleBasic("morty", "gazorpazorp")
+	bearer         = HandleBearerSource(StaticBearerSource([]byte("plumbus")))
+	hashedToken, _ = HashedStaticBearerSource([]byte("34831eccb70007e3ed06bb8ba0e2c80e661c440d09fb6513c96cd1fdeb5c57cc"))
+	bearerHashed   = HandleBearerSource(hashedToken)
+	external       Handler
 )
 
 func mustHexDecodeString(v string) []byte {
