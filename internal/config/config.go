@@ -247,7 +247,7 @@ func (a *AuthenticationBearer) Validate(ctx context.Context) (err error) {
 		return err
 	}
 
-	if len(token) == 0 {
+	if len(token) > 0 {
 		return setStaticTokenSource(token)
 	}
 
