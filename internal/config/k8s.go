@@ -13,43 +13,65 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/informers"
+	"k8s.io/client-go/informers/core"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-func watchK8sConfigMap(ctx context.Context, ch chan<- *TunnelGroups, namespace, name, key string) error {
+type k8sSource struct {
+	logger  *slog.Logger
+	factory informers.SharedInformerFactory
+}
+
+func newK8sSource(ctx context.Context) (*k8sSource, error) {
 	config, err := k8sConfig()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	factory := informers.NewFilteredSharedInformerFactory(client, 0, namespace, func(lo *metav1.ListOptions) {
+	return newK8sSourceForClientset(ctx, client), nil
+}
+
+func newK8sSourceForClientset(ctx context.Context, clientset kubernetes.Interface) *k8sSource {
+	src := &k8sSource{
+		logger:  slog.With("component", "k8s_source"),
+		factory: informers.NewSharedInformerFactory(clientset, 0),
+	}
+
+	src.logger.Debug("Starting Informer Factory")
+
+	src.factory.Start(ctx.Done())
+
+	return src
+}
+
+func (s *k8sSource) watchConfigMap(ctx context.Context, ch chan<- *TunnelGroups, namespace, name, key string) error {
+	informer := core.New(s.factory, namespace, func(lo *metav1.ListOptions) {
 		lo.FieldSelector = fields.OneTermEqualSelector("metadata.name", name).String()
-	})
+	}).V1().ConfigMaps().Informer()
 
-	informer := factory.Core().V1().ConfigMaps().Informer()
-	informer.AddEventHandler(TypedEventHandler[v1.ConfigMap]{
+	informer.AddEventHandler(TypedEventHandler[*v1.ConfigMap]{
 		logger: slog.With("resource", "configmap"),
-		AddFunc: func(cm v1.ConfigMap) {
+		AddFunc: func(cm *v1.ConfigMap) {
 			tg, err := buildTunnelGroupsFromConfigMap(ctx, cm, key)
 			if err != nil {
-				slog.Error("Converting ConfigMap into tunnel groups", "error", err)
+				s.logger.Error("Converting ConfigMap into tunnel groups", "error", err)
 				return
 			}
 
 			ch <- tg
 		},
-		UpdateFunc: func(_, cm v1.ConfigMap) {
+		UpdateFunc: func(_, cm *v1.ConfigMap) {
 			tg, err := buildTunnelGroupsFromConfigMap(ctx, cm, key)
 			if err != nil {
-				slog.Error("Converting ConfigMap into tunnel groups", "error", err)
+				s.logger.Error("Converting ConfigMap into tunnel groups", "error", err)
 				return
 			}
 
@@ -57,15 +79,18 @@ func watchK8sConfigMap(ctx context.Context, ch chan<- *TunnelGroups, namespace, 
 		},
 	})
 
-	factory.Start(ctx.Done())
+	s.logger.Debug("Starting ConfigMap Watcher")
+
+	go informer.Run(ctx.Done())
 
 	// wait for initial list to complete and watchers to begin before proceeding
-	factory.WaitForCacheSync(ctx.Done())
+	s.logger.Debug("Waiting for Cache Sync")
+	s.factory.WaitForCacheSync(ctx.Done())
 
 	return nil
 }
 
-func buildTunnelGroupsFromConfigMap(ctx context.Context, cfg v1.ConfigMap, key string) (*TunnelGroups, error) {
+func buildTunnelGroupsFromConfigMap(ctx context.Context, cfg *v1.ConfigMap, key string) (*TunnelGroups, error) {
 	raw, ok := cfg.Data[key]
 	if !ok {
 		return nil, fmt.Errorf("key %q not found in ConfigMap", key)
@@ -91,28 +116,28 @@ type secretBearerSource struct {
 	hashed    bool
 }
 
-func newSecretBearerSource(ctx context.Context, namespace, name, key string, hashed bool) (*secretBearerSource, error) {
+func (s *k8sSource) newSecretBearerSource(ctx context.Context, namespace, name, key string, hashed bool) (*secretBearerSource, error) {
 	source := &secretBearerSource{namespace: namespace, name: name, key: key, hashed: hashed}
-	config, err := k8sConfig()
-	if err != nil {
-		return nil, err
-	}
 
-	client, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-
-	factory := informers.NewFilteredSharedInformerFactory(client, 0, namespace, nil)
-
-	source.informer = factory.Core().V1().Secrets().Informer()
-	source.informer.AddEventHandler(TypedEventHandler[v1.Secret]{
-		logger: slog.With("resource", "secret"),
+	source.informer = core.New(s.factory, namespace, nil).V1().Secrets().Informer()
+	source.informer.AddEventHandler(TypedEventHandler[*v1.Secret]{
+		logger: s.logger.With("resource", "secret"),
 	})
 
-	factory.Start(ctx.Done())
+	s.logger.Debug("Starting secret watcher")
+	go source.informer.Run(ctx.Done())
+
+	s.logger.Debug("Waiting for cache sync")
 	// wait for initial list to complete and watchers to begin before proceeding
-	factory.WaitForCacheSync(ctx.Done())
+	for !source.informer.HasSynced() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		s.factory.WaitForCacheSync(ctx.Done())
+	}
+
+	s.logger.Debug("Finished waiting for sync")
 
 	return source, nil
 }
@@ -120,21 +145,23 @@ func newSecretBearerSource(ctx context.Context, namespace, name, key string, has
 // GetCredential returns a bearer credential
 // HandleBearerSource expects all tokens to have been hashed with SHA256
 func (s *secretBearerSource) GetCredential() ([]byte, error) {
-	name := cache.ObjectName{
-		Namespace: s.namespace,
-		Name:      s.name,
+	secret := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: s.namespace,
+			Name:      s.name,
+		},
 	}
 
-	obj, exists, err := s.informer.GetStore().Get(name)
+	obj, exists, err := s.informer.GetStore().Get(secret)
 	if err != nil {
 		return nil, err
 	}
 
 	if !exists {
-		return nil, fmt.Errorf("secret not found: %v", name)
+		return nil, fmt.Errorf("secret not found: %s/%s", secret.ObjectMeta.GetNamespace(), secret.ObjectMeta.GetName())
 	}
 
-	secret, ok := obj.(v1.Secret)
+	secret, ok := obj.(*v1.Secret)
 	if !ok {
 		return nil, fmt.Errorf("secret unexpected type: %T", obj)
 	}
@@ -170,7 +197,10 @@ type TypedEventHandler[T any] struct {
 
 // OnAdd calls AddFunc if it's not nil.
 func (t TypedEventHandler[T]) OnAdd(obj interface{}, isInInitialList bool) {
-	t.logger.Debug("Resource added")
+	if t.logger != nil {
+		t.logger.Debug("Resource added")
+	}
+
 	if t.AddFunc != nil {
 		t.AddFunc(obj.(T))
 	}
@@ -178,15 +208,31 @@ func (t TypedEventHandler[T]) OnAdd(obj interface{}, isInInitialList bool) {
 
 // OnUpdate calls UpdateFunc if it's not nil.
 func (t TypedEventHandler[T]) OnUpdate(oldObj, newObj interface{}) {
-	t.logger.Debug("Resource updated")
+	if t.logger != nil {
+		t.logger.Debug("Resource updated")
+	}
+
 	if t.UpdateFunc != nil {
-		t.UpdateFunc(oldObj.(T), newObj.(T))
+		var oldT T
+		if oldObj != nil {
+			oldT = oldObj.(T)
+		}
+
+		var newT T
+		if newObj != nil {
+			newT = newObj.(T)
+		}
+
+		t.UpdateFunc(oldT, newT)
 	}
 }
 
 // OnDelete calls DeleteFunc if it's not nil.
 func (t TypedEventHandler[T]) OnDelete(obj interface{}) {
-	t.logger.Debug("Resource deleted")
+	if t.logger != nil {
+		t.logger.Debug("Resource deleted")
+	}
+
 	if t.DeleteFunc != nil {
 		t.DeleteFunc(obj.(T))
 	}

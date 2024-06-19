@@ -10,11 +10,26 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"go.flipt.io/reverst/internal/auth"
 	"go.flipt.io/reverst/pkg/protocol"
 )
+
+var (
+	kSource    *k8sSource
+	kSourceErr error
+	once       sync.Once
+)
+
+func getK8sSource(ctx context.Context) (*k8sSource, error) {
+	once.Do(func() {
+		kSource, kSourceErr = newK8sSource(ctx)
+	})
+
+	return kSource, kSourceErr
+}
 
 type Config struct {
 	Level             Level  `ff:" short=l | long=log              | default=info             | usage: 'debug, info, warn or error'                           "`
@@ -65,7 +80,12 @@ func (c *Config) SubscribeTunnelGroups(ctx context.Context, ch chan<- *TunnelGro
 				return fmt.Errorf("unexpected k8s configmap path: %w", err)
 			}
 
-			return watchK8sConfigMap(ctx, ch, ns, name, key)
+			source, err := getK8sSource(ctx)
+			if err != nil {
+				return err
+			}
+
+			return source.watchConfigMap(ctx, ch, ns, name, key)
 		}
 
 		return fmt.Errorf("unsupported k8s resource: %q (expected [configmap])", u.Host)
@@ -138,12 +158,14 @@ func (g TunnelGroups) AuthenticationHandler() protocol.AuthenticationHandler {
 // TunnelGroup is an instance of a tunnel group which identifies
 // the hostnames served by the instances in the group.
 type TunnelGroup struct {
-	Hosts          []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
-	Authentication struct {
-		Basic    *AuthenticationBasic    `json:"basic,omitempty" yaml:"basic,omitempty"`
-		Bearer   *AuthenticationBearer   `json:"bearer,omitempty" yaml:"bearer,omitempty"`
-		External *AuthenticationExternal `json:"external,omitempty" yaml:"external,omitempty"`
-	} `json:"authentication,omitempty" yaml:"authentication,omitempty"`
+	Hosts          []string                  `json:"hosts,omitempty" yaml:"hosts,omitempty"`
+	Authentication TunnelGroupAuthentication `json:"authentication,omitempty" yaml:"authentication,omitempty"`
+}
+
+type TunnelGroupAuthentication struct {
+	Basic    *AuthenticationBasic    `json:"basic,omitempty" yaml:"basic,omitempty"`
+	Bearer   *AuthenticationBearer   `json:"bearer,omitempty" yaml:"bearer,omitempty"`
+	External *AuthenticationExternal `json:"external,omitempty" yaml:"external,omitempty"`
 }
 
 type AuthenticationBasic struct {
@@ -250,7 +272,12 @@ func (a *AuthenticationBearer) Validate(ctx context.Context) (err error) {
 				return fmt.Errorf("unexpected k8s secret path: %w", err)
 			}
 
-			a.source, err = newSecretBearerSource(ctx, ns, name, key, true)
+			source, err := getK8sSource(ctx)
+			if err != nil {
+				return err
+			}
+
+			a.source, err = source.newSecretBearerSource(ctx, ns, name, key, true)
 			if err != nil {
 				return err
 			}
