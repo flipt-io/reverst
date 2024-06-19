@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,11 +10,26 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"go.flipt.io/reverst/internal/auth"
 	"go.flipt.io/reverst/pkg/protocol"
 )
+
+var (
+	kSource    *k8sSource
+	kSourceErr error
+	once       sync.Once
+)
+
+func getK8sSource(ctx context.Context) (*k8sSource, error) {
+	once.Do(func() {
+		kSource, kSourceErr = newK8sSource(ctx)
+	})
+
+	return kSource, kSourceErr
+}
 
 type Config struct {
 	Level             Level  `ff:" short=l | long=log              | default=info             | usage: 'debug, info, warn or error'                           "`
@@ -61,12 +75,17 @@ func (c *Config) SubscribeTunnelGroups(ctx context.Context, ch chan<- *TunnelGro
 		return watchFSNotify(ctx, ch, filepath.Join(u.Host, u.Path), c.WatchTunnelGroups)
 	case "k8s":
 		if u.Host == "configmap" {
-			parts := strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 3)
-			if len(parts) < 3 {
-				return fmt.Errorf("unexpected k8s configmap path: %q (should be [namespace]/[name]/[key])", u.Path)
+			ns, name, key, err := k8sObjectNamespaceNameKey(u.Path)
+			if err != nil {
+				return fmt.Errorf("unexpected k8s configmap path: %w", err)
 			}
 
-			return watchK8sConfigMap(ctx, ch, parts[0], parts[1], parts[2], c.WatchTunnelGroups)
+			source, err := getK8sSource(ctx)
+			if err != nil {
+				return err
+			}
+
+			return source.watchConfigMap(ctx, ch, ns, name, key)
 		}
 
 		return fmt.Errorf("unsupported k8s resource: %q (expected [configmap])", u.Host)
@@ -81,9 +100,9 @@ type TunnelGroups struct {
 	Groups map[string]TunnelGroup `json:"groups,omitempty" yaml:"groups,omitempty"`
 }
 
-func (g TunnelGroups) Validate() error {
+func (g TunnelGroups) Validate(ctx context.Context) error {
 	for _, g := range g.Groups {
-		if err := g.Validate(); err != nil {
+		if err := g.Validate(ctx); err != nil {
 			return err
 		}
 	}
@@ -111,11 +130,7 @@ func (g TunnelGroups) AuthenticationHandler() protocol.AuthenticationHandler {
 				scheme = "Bearer"
 			}
 
-			if bearer.Token != "" {
-				handler[scheme] = auth.HandleBearer(bearer.Token)
-			} else {
-				handler[scheme] = auth.HandleBearerHashed(bearer.hashedTokenBytes)
-			}
+			handler[scheme] = auth.HandleBearerSource(bearer.source)
 		}
 
 		if external := group.Authentication.External; external != nil {
@@ -143,12 +158,14 @@ func (g TunnelGroups) AuthenticationHandler() protocol.AuthenticationHandler {
 // TunnelGroup is an instance of a tunnel group which identifies
 // the hostnames served by the instances in the group.
 type TunnelGroup struct {
-	Hosts          []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
-	Authentication struct {
-		Basic    *AuthenticationBasic    `json:"basic,omitempty" yaml:"basic,omitempty"`
-		Bearer   *AuthenticationBearer   `json:"bearer,omitempty" yaml:"bearer,omitempty"`
-		External *AuthenticationExternal `json:"external,omitempty" yaml:"external,omitempty"`
-	} `json:"authentication,omitempty" yaml:"authentication,omitempty"`
+	Hosts          []string                  `json:"hosts,omitempty" yaml:"hosts,omitempty"`
+	Authentication TunnelGroupAuthentication `json:"authentication,omitempty" yaml:"authentication,omitempty"`
+}
+
+type TunnelGroupAuthentication struct {
+	Basic    *AuthenticationBasic    `json:"basic,omitempty" yaml:"basic,omitempty"`
+	Bearer   *AuthenticationBearer   `json:"bearer,omitempty" yaml:"bearer,omitempty"`
+	External *AuthenticationExternal `json:"external,omitempty" yaml:"external,omitempty"`
 }
 
 type AuthenticationBasic struct {
@@ -159,7 +176,7 @@ type AuthenticationBasic struct {
 
 func (a *AuthenticationBasic) scheme() string { return a.Scheme }
 
-func (a *AuthenticationBasic) Validate() error {
+func (a *AuthenticationBasic) Validate(context.Context) error {
 	if a == nil {
 		return nil
 	}
@@ -180,17 +197,17 @@ func (a *AuthenticationBasic) Validate() error {
 }
 
 type AuthenticationBearer struct {
-	Scheme           string `json:"scheme,omitempty" yaml:"scheme,omitempty"`
-	Token            string `json:"token,omitempty" yaml:"token,omitempty"`
-	TokenPath        string `json:"tokenPath,omitempty" yaml:"tokenPath,omitempty"`
-	HashedToken      string `json:"hashedToken,omitempty" yaml:"hashedToken,omitempty"`
-	HashedTokenPath  string `json:"hashedTokenPath,omitempty" yaml:"hashedTokenPath,omitempty"`
-	hashedTokenBytes []byte `json:"-" yaml:"-"`
+	Scheme          string            `json:"scheme,omitempty" yaml:"scheme,omitempty"`
+	Token           string            `json:"token,omitempty" yaml:"token,omitempty"`
+	TokenPath       string            `json:"tokenPath,omitempty" yaml:"tokenPath,omitempty"`
+	HashedToken     string            `json:"hashedToken,omitempty" yaml:"hashedToken,omitempty"`
+	HashedTokenPath string            `json:"hashedTokenPath,omitempty" yaml:"hashedTokenPath,omitempty"`
+	source          auth.BearerSource `json:"-" yaml:"-"`
 }
 
 func (a *AuthenticationBearer) scheme() string { return a.Scheme }
 
-func (a *AuthenticationBearer) Validate() error {
+func (a *AuthenticationBearer) Validate(ctx context.Context) (err error) {
 	if a == nil {
 		return nil
 	}
@@ -199,42 +216,79 @@ func (a *AuthenticationBearer) Validate() error {
 		a.Scheme = "Bearer"
 	}
 
-	if a.Token == "" &&
-		a.TokenPath == "" &&
-		a.HashedToken == "" &&
-		a.HashedTokenPath == "" {
+	var (
+		token  []byte
+		path   string
+		hashed bool
+	)
+
+	switch {
+	case a.Token != "":
+		token = []byte(a.Token)
+	case a.TokenPath != "":
+		path = a.TokenPath
+	case a.HashedToken != "":
+		token = []byte(a.HashedToken)
+		hashed = true
+	case a.HashedTokenPath != "":
+		path = a.HashedTokenPath
+		hashed = true
+	default:
 		return errors.New("bearer: one of token, tokenPath, hashedToken or hashedTokenPath must be non-empty string")
 	}
 
-	// token path takes precedent and replaces token contents
-	if a.TokenPath != "" {
-		tokenBytes, err := os.ReadFile(a.TokenPath)
-		if err != nil {
-			return fmt.Errorf("bearer: validating token path %w", err)
+	setStaticTokenSource := func(token []byte) (err error) {
+		if !hashed {
+			a.source = auth.StaticBearerSource(token)
+			return
 		}
 
-		a.Token = string(tokenBytes)
+		a.source, err = auth.HashedStaticBearerSource(token)
+		return err
 	}
 
-	// hashed token path takes precedent and replaces hashed token contents
-	if a.HashedTokenPath != "" {
-		tokenBytes, err := os.ReadFile(a.HashedTokenPath)
+	if len(token) == 0 {
+		return setStaticTokenSource(token)
+	}
+
+	u, err := url.Parse(path)
+	if err != nil {
+		return err
+	}
+
+	// otherwise, assume the token has been defined at some path
+	switch u.Scheme {
+	case "", "file":
+		token, err = os.ReadFile(path)
 		if err != nil {
-			return fmt.Errorf("bearer: validating hashed token path %w", err)
+			return fmt.Errorf("bearer: reading token path %q: %w", path, err)
 		}
 
-		a.HashedToken = string(tokenBytes)
-	}
+		return setStaticTokenSource(token)
+	case "k8s":
+		if u.Host == "secret" {
+			ns, name, key, err := k8sObjectNamespaceNameKey(u.Path)
+			if err != nil {
+				return fmt.Errorf("unexpected k8s secret path: %w", err)
+			}
 
-	if a.HashedToken != "" {
-		var err error
-		a.hashedTokenBytes, err = hex.DecodeString(a.HashedToken)
-		if err != nil {
-			return fmt.Errorf("bearer: decoding hashed token: %w", err)
+			source, err := getK8sSource(ctx)
+			if err != nil {
+				return err
+			}
+
+			a.source, err = source.newSecretBearerSource(ctx, ns, name, key, true)
+			if err != nil {
+				return err
+			}
+
+			return nil
 		}
-	}
 
-	return nil
+		return fmt.Errorf("unsupported k8s resource: %q (expected [secret])", u.Host)
+	default:
+		return fmt.Errorf("unsupported path scheme: %q (expected one of [file k8s])", u.Scheme)
+	}
 }
 
 type AuthenticationExternal struct {
@@ -244,7 +298,7 @@ type AuthenticationExternal struct {
 
 func (a *AuthenticationExternal) scheme() string { return a.Scheme }
 
-func (a *AuthenticationExternal) Validate() error {
+func (a *AuthenticationExternal) Validate(context.Context) error {
 	if a == nil {
 		return nil
 	}
@@ -264,7 +318,7 @@ func (a *AuthenticationExternal) Validate() error {
 	return nil
 }
 
-func (g TunnelGroup) Validate() error {
+func (g TunnelGroup) Validate(ctx context.Context) error {
 	auth := g.Authentication
 	if auth.Basic == nil && auth.Bearer == nil && auth.External == nil {
 		slog.Warn("No authentication has been configured for tunnel (insecure)")
@@ -282,7 +336,7 @@ func (g TunnelGroup) Validate() error {
 			continue
 		}
 
-		if err := s.Validate(); err != nil {
+		if err := s.Validate(ctx); err != nil {
 			return err
 		}
 
@@ -298,7 +352,7 @@ func (g TunnelGroup) Validate() error {
 
 type validator interface {
 	scheme() string
-	Validate() error
+	Validate(context.Context) error
 }
 
 type Level slog.Level
@@ -315,4 +369,14 @@ func (l *Level) Set(v string) error {
 
 	*l = Level(level)
 	return nil
+}
+
+func k8sObjectNamespaceNameKey(path string) (namespace, name, key string, err error) {
+	parts := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 3)
+	if len(parts) < 3 {
+		err = fmt.Errorf("expected path form [namespace]/[name]/[key] found: %q", path)
+		return
+	}
+
+	return parts[0], parts[1], parts[2], nil
 }
