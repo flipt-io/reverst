@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"crypto/sha256"
 	"log/slog"
 	"strings"
 	"testing"
@@ -120,7 +121,8 @@ func Test_k8sSource_secretBearerSource(t *testing.T) {
 	token, err := bearerSource.GetCredential()
 	require.NoError(t, err)
 
-	assert.Equal(t, []byte("sometokenvalue"), token)
+	expected := sha256.Sum256([]byte("sometokenvalue"))
+	assert.Equal(t, expected[:], token)
 
 	updated := make(chan struct{})
 	bearerSource.informer.AddEventHandler(TypedEventHandler[*corev1.Secret]{
@@ -150,7 +152,8 @@ func Test_k8sSource_secretBearerSource(t *testing.T) {
 	token, err = bearerSource.GetCredential()
 	require.NoError(t, err)
 
-	assert.Equal(t, []byte("somenewtokenvalue"), token)
+	expected = sha256.Sum256([]byte("somenewtokenvalue"))
+	assert.Equal(t, expected[:], token)
 }
 
 func mustMarshal(t *testing.T, v map[string]any) string {

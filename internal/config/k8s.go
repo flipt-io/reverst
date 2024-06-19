@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -177,7 +178,8 @@ func (s *secretBearerSource) GetCredential() ([]byte, error) {
 		return dst, err
 	}
 
-	return token, nil
+	dst := sha256.Sum256(token)
+	return dst[:], nil
 }
 
 func k8sConfig() (*rest.Config, error) {
