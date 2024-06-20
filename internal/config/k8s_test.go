@@ -3,8 +3,10 @@ package config
 import (
 	"context"
 	"crypto/sha256"
+	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,7 +19,7 @@ import (
 )
 
 func Test_k8sSource_watchConfigMap(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{
+	logger := slog.New(slog.NewTextHandler(newTestWriter(t), &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
 
@@ -86,7 +88,7 @@ func Test_k8sSource_watchConfigMap(t *testing.T) {
 }
 
 func Test_k8sSource_secretBearerSource(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{
+	logger := slog.New(slog.NewTextHandler(newTestWriter(t), &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
 
@@ -167,10 +169,31 @@ func mustMarshal(t *testing.T, v map[string]any) string {
 
 type testWriter struct {
 	t *testing.T
+
+	mu  sync.Mutex
+	err error
 }
 
-func (t testWriter) Write(v []byte) (int, error) {
+func newTestWriter(t *testing.T) *testWriter {
+	t.Helper()
+	wr := &testWriter{t: t}
+	t.Cleanup(func() {
+		wr.mu.Lock()
+		wr.err = io.EOF
+		wr.mu.Unlock()
+	})
+	return wr
+}
+
+func (t *testWriter) Write(v []byte) (int, error) {
 	t.t.Helper()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.err != nil {
+		return 0, t.err
+	}
+
 	t.t.Log(strings.TrimSpace(string(v)))
 	return len(v), nil
 }
