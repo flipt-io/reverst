@@ -125,15 +125,23 @@ func (s *k8sSource) newSecretBearerSource(ctx context.Context, namespace, name, 
 		logger: s.logger.With("resource", "secret"),
 	})
 
+	// the informer may have been cached by the factory and already started
+	// this avoids attempting to double run the informer (this just produces a warning)
+	if source.informer.HasSynced() {
+		return source, nil
+	}
+
 	s.logger.Debug("Starting secret watcher")
+
 	go source.informer.Run(ctx.Done())
 
-	s.logger.Debug("Waiting for cache sync")
 	// wait for initial list to complete and watchers to begin before proceeding
 	for !source.informer.HasSynced() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+
+		s.logger.Debug("Waiting for cache sync")
 
 		s.factory.WaitForCacheSync(ctx.Done())
 	}
