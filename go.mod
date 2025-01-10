@@ -7,8 +7,8 @@ toolchain go1.22.2
 require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/peterbourgon/ff/v4 v4.0.0-alpha.4
-	github.com/prometheus/client_golang v1.19.0
-	github.com/quic-go/quic-go v0.44.0
+	github.com/prometheus/client_golang v1.19.1
+	github.com/quic-go/quic-go v0.48.2
 	github.com/stretchr/testify v1.9.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	go.opentelemetry.io/otel v1.25.0
@@ -55,7 +55,7 @@ require (
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
-	github.com/quic-go/qpack v0.4.0 // indirect
+	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.25.0 // indirect
@@ -64,7 +64,7 @@ require (
 	golang.org/x/crypto v0.31.0 // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/mod v0.17.0 // indirect
-	golang.org/x/net v0.25.0 // indirect
+	golang.org/x/net v0.28.0 // indirect
 	golang.org/x/oauth2 v0.16.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/term v0.27.0 // indirect
