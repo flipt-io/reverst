@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -69,8 +70,8 @@ func (r AuthenticationHandlerFunc) Authenticate(scheme, payload string) error {
 
 // HandleBasic performs basic authentication for register listener request metadata
 func HandleBasic(username, password string) Handler {
-	expectedUsername := safeComparator(username)
-	expectedPassword := safeComparator(password)
+	expectedUsername := safeComparator([]byte(username))
+	expectedPassword := safeComparator([]byte(password))
 
 	return AuthenticationHandlerFunc(func(scheme, cred string) error {
 		if !strings.EqualFold(scheme, "Basic") {
@@ -95,29 +96,56 @@ func HandleBasic(username, password string) Handler {
 	})
 }
 
-// HandleBearer performs a bearer token comparison for register listener request metadata
-func HandleBearer(token string) Handler {
-	expectedToken := safeComparator(token)
+// BearerSource is any type that returns a credential which can be used
+// to authenticate a tunnel registration
+type BearerSource interface {
+	// GetCredential returns a bearer credential
+	// HandleBearerSource expects all tokens to have been hashed with SHA256
+	GetCredential() ([]byte, error)
+}
 
-	return AuthenticationHandlerFunc(func(scheme, token string) error {
-		if !strings.EqualFold(scheme, "Bearer") {
-			return fmt.Errorf("bearer: unexpected scheme %q", scheme)
-		}
+// BearerSourceFunc is a function which implements BearerSource
+type BearerSourceFunc func() ([]byte, error)
 
-		if !expectedToken(token) {
-			return errors.New("bearer: token was not expected value")
-		}
+// GetCredential delegates to the underlying BearerSourceFunc
+func (fn BearerSourceFunc) GetCredential() ([]byte, error) {
+	return fn()
+}
 
-		return nil
+// StaticBearerSource is a BearerSource that returns the provided
+// expected token after hashing it with SHA256
+func StaticBearerSource(expected []byte) BearerSource {
+	sum := sha256.Sum256(expected)
+	return BearerSourceFunc(func() ([]byte, error) {
+		return sum[:], nil
 	})
 }
 
-// HandleBearerHashed performs a bearer token comparison for register listener request metadata
-// It expects the token to have been pre-hashed using sha256 and encoded as a hexidecimal string
-func HandleBearerHashed(expected []byte) Handler {
+// HashedStaticBearerSource is a BearerSource that returns the provided
+// expected token decoded from hexidecimal (assumes it was pre-hashed with SHA256)
+func HashedStaticBearerSource(expected []byte) (BearerSource, error) {
+	dst := make([]byte, hex.DecodedLen(len(expected)))
+	if _, err := hex.Decode(dst, expected); err != nil {
+		return nil, err
+	}
+
+	return BearerSourceFunc(func() ([]byte, error) {
+		return dst, nil
+	}), nil
+}
+
+// HandleBearerSource returns an authentication handler which delegates
+// to the provided BearerSource to obtain credentials which it then performs
+// a safe comparison on with the SHA256 sum of the presented tokens
+func HandleBearerSource(src BearerSource) Handler {
 	return AuthenticationHandlerFunc(func(scheme, token string) error {
 		if !strings.EqualFold(scheme, "Bearer") {
 			return fmt.Errorf("bearer: unexpected scheme %q", scheme)
+		}
+
+		expected, err := src.GetCredential()
+		if err != nil {
+			return err
 		}
 
 		sum := sha256.Sum256([]byte(token))
@@ -156,8 +184,8 @@ func HandleExternalAuthorizer(addr string) Handler {
 	})
 }
 
-func safeComparator(expected string) func(string) bool {
-	expectedSum := sha256.Sum256([]byte(expected))
+func safeComparator(expected []byte) func(string) bool {
+	expectedSum := sha256.Sum256(expected)
 	return func(presented string) bool {
 		presentedSum := sha256.Sum256([]byte(presented))
 		return subtle.ConstantTimeCompare(expectedSum[:], presentedSum[:]) == 1

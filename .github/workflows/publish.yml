@@ -1,12 +1,11 @@
 name: 'Publish'
 
 on:
-  push:
-    branches:
-    - main
+  workflow_dispatch:
+  merge_group:
 
 jobs:
-  dagger:
+  publish-image:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -17,8 +16,8 @@ jobs:
       - name: Call Dagger Function
         uses: dagger/dagger-for-github@v5
         with:
-          version: "0.10.3"
+          version: "0.11.6"
           verb: call
-          args: publish --source . --password env:GITHUB_TOKEN
+          args: publish --source . --password env:GITHUB_TOKEN --tag ${{ github.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

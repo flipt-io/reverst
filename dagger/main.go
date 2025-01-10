@@ -43,14 +43,14 @@ func (m *Reverst) BuildContainer(
 		Go().
 		FromVersion("1.22-alpine3.18").
 		Build(source, dagger.GoBuildOpts{
-			Packages: []string{"./cmd/reverst/..."},
+			Packages: []string{"./cmd/reverstd/..."},
 		})
 
 	return dag.
 		Container().
 		From("alpine:3.18").
-		WithFile("/usr/local/bin/reverst", build.File("reverst")).
-		WithEntrypoint([]string{"reverst"}), nil
+		WithFile("/usr/local/bin/reverstd", build.File("reverstd")).
+		WithEntrypoint([]string{"reverstd"}), nil
 }
 
 func (m *Reverst) TestUnit(
@@ -64,7 +64,7 @@ func (m *Reverst) TestUnit(
 		WithEnvVariable("CGO_ENABLED", "1").
 		WithMountedDirectory("/src", source).
 		WithWorkdir("/src").
-		WithExec([]string{"go", "test", "-race", "./..."}).
+		WithExec([]string{"go", "test", "-race", "-count=5", "./..."}).
 		Stdout(ctx)
 	if err != nil {
 		return out, err
@@ -155,6 +155,9 @@ func (m *Reverst) Publish(
 	//+optional
 	//+default="reverst"
 	image string,
+	//+optional
+	//+default="latest"
+	tag string,
 ) (string, error) {
 	ctr, err := m.BuildContainer(ctx, source)
 	if err != nil {
@@ -163,7 +166,7 @@ func (m *Reverst) Publish(
 
 	return ctr.
 		WithRegistryAuth(registry, username, password).
-		Publish(ctx, fmt.Sprintf("%s/%s/%s", registry, username, image))
+		Publish(ctx, fmt.Sprintf("%s/%s/%s:%s", registry, username, image, tag))
 }
 
 func generateKeyPair() ([]byte, []byte, error) {

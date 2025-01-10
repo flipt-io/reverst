@@ -2,6 +2,8 @@ package roundrobbin
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,7 +26,6 @@ func Test_Set(t *testing.T) {
 
 	cctx, ccancel := context.WithCancel(cctx)
 	set.Register(cctx, c)
-
 	set.Register(dctx, d)
 
 	var (
@@ -65,4 +66,46 @@ func Test_Set(t *testing.T) {
 	}
 
 	assert.Equal(t, expected, found)
+}
+
+func Test_Set_RemoveConcurrent(t *testing.T) {
+	var (
+		a, actx = "a", context.Background()
+		b, bctx = "b", context.Background()
+	)
+
+	var deleted uint32
+	set := Set[string]{
+		evicted: func(s string) {
+			require.Equal(t, "a", s)
+			atomic.AddUint32(&deleted, 1)
+		},
+	}
+
+	set.Register(actx, a)
+	set.Register(bctx, b)
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			_, ok, err := set.Next(context.Background())
+			require.NoError(t, err)
+			assert.True(t, ok, "set has become unexpectedly empty")
+		}
+	}()
+
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			set.Remove("a")
+		}()
+	}
+
+	wg.Wait()
+
+	assert.Equal(t, uint32(1), deleted)
 }
