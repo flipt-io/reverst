@@ -1,0 +1,11 @@
+# .kodiak.toml
+version = 1
+
+[approve]
+auto_approve_usernames = ["dependabot"]
+
+[update]
+always = true
+
+[merge]
+method = "squash"
